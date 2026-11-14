@@ -1,4 +1,6 @@
-export type ThemeId = "amazonia" | "taiga" | "caatinga" | "bambucal" | "pantanal";
+import manguezalSmartImg from "./assets/images/manguezal_smart_1794534276228.jpg";
+
+export type ThemeId = "amazonia" | "taiga" | "caatinga" | "bambucal" | "manguezal";
 
 export interface ThemeColors {
   bgApp: string;          // Main background
@@ -40,6 +42,7 @@ export interface ThemeDefinition {
   name: string;
   environmentTitle: string;
   biome: string;
+  shortCaracteristica: string;
   colorsDescription: string;
   bgImage: string;
   particleType: "fireflies" | "snow" | "dust" | "leaves" | "ripples";
@@ -56,8 +59,9 @@ export const THEMES: Record<ThemeId, ThemeDefinition> = {
     id: "amazonia",
     name: "Amazônia",
     environmentTitle: "Floresta Inteligente",
-    biome: "Floresta Tropical Úmida & Dossel",
-    colorsDescription: "Verde-floresta, verde-esmeralda e verde-musgo",
+    biome: "Floresta Tropical Densa, Rios & Sensores Ambientais",
+    shortCaracteristica: "Floresta tropical, vegetação densa, rios e sensores ambientais",
+    colorsDescription: "Verde-floresta, verde-esmeralda e verde-neon",
     bgImage: "/assets/images/amazonia_smart.jpg",
     particleType: "fireflies",
     glowColor: "rgba(16, 185, 129, 0.4)",
@@ -88,21 +92,22 @@ export const THEMES: Record<ThemeId, ThemeDefinition> = {
       { name: "Arara-vermelha", scientificName: "Ara chloropterus", category: "Avifauna do Dossel", status: "Em Revoada Ativa" },
       { name: "Tucano", scientificName: "Ramphastos toco", category: "Dispersor Florestal", status: "Avistado na Copa" },
       { name: "Bicho-preguiça", scientificName: "Bradypus tridactylus", category: "Mamífero Arborícola", status: "Movimento Tranquilo" },
-      { name: "Macaco-aranha", scientificName: "Ateles paniscus", category: "Primate da Selva", status: "Bando Rastreado" }
+      { name: "Boto-cor-de-rosa", scientificName: "Inia geoffrensis", category: "Fauna Fluvial", status: "Rastreamento Hidroacústico" }
     ],
     smartDevices: [
       { name: "Câmera de Monitoramento Florestal", type: "Visão Noturna AI 4K", status: "transmitting", telemetry: "30 fps • Detecção de Fauna" },
       { name: "Sensor de Umidade do Solo", type: "Sonda LoRaWAN Subsuperfície", status: "online", telemetry: "84.2% UR • pH 6.1" },
       { name: "Sensor de Temperatura de Copa", type: "Sensor Térmico de Dossel", status: "monitoring", telemetry: "27.4°C • Sensação 29°C" },
-      { name: "Estação Meteorológica Inteligente", type: "Solar Telemetry Node", status: "online", telemetry: "1012 hPa • Chuva 12mm/h" },
+      { name: "Estação Fluvial Amazônica", type: "Boia Telemétrica Solar", status: "online", telemetry: "Nível Rio +4.2m • OD 7.8 mg/L" },
       { name: "Drone de Monitoramento Ambiental", type: "Eco-UAV Autônomo", status: "active", telemetry: "Patrulha 2.4km • Bateria 94%" }
     ]
   },
   taiga: {
     id: "taiga",
     name: "Taiga",
-    environmentTitle: "Floresta Tecnológica Gelada",
-    biome: "Floresta Boreal & Montanhas Árticas",
+    environmentTitle: "Floresta Boreal Monitorada",
+    biome: "Floresta de Coníferas, Neve & Monitoramento Climático",
+    shortCaracteristica: "Coníferas, neve, clima frio e monitoramento climático",
     colorsDescription: "Azul-petróleo, verde-pinheiro e azul-gelo",
     bgImage: "/assets/images/taiga_smart.jpg",
     particleType: "snow",
@@ -130,7 +135,7 @@ export const THEMES: Record<ThemeId, ThemeDefinition> = {
       glow: "rgba(56, 189, 248, 0.25)"
     },
     animals: [
-      { name: "Lobo-cinzento", scientificName: "Canis lupus", category: "Líder de Alcatéia", status: "Alcance Rastreado" },
+      { name: "Lobo-cinzento", scientificName: "Canis lupus", category: "Líder de Alcateia", status: "Alcance Rastreado" },
       { name: "Urso-pardo", scientificName: "Ursus arctos", category: "Grande Mamífero", status: "Em Forrageamento" },
       { name: "Alce", scientificName: "Alces alces", category: "Herbívoro Nórdico", status: "Vale de Coníferas" },
       { name: "Raposa-vermelha", scientificName: "Vulpes vulpes", category: "Caçadora Ártica", status: "Sensor de Trilha Ativo" },
@@ -148,8 +153,9 @@ export const THEMES: Record<ThemeId, ThemeDefinition> = {
     id: "caatinga",
     name: "Caatinga",
     environmentTitle: "Sertão Inteligente",
-    biome: "Semiárido Brasileiro & Cactáceas",
-    colorsDescription: "Areia, terracota, marrom e verde-cacto",
+    biome: "Clima Semiárido, Cactos & Monitoramento Hídrico",
+    shortCaracteristica: "Semiárido, solo seco, cactos e monitoramento hídrico",
+    colorsDescription: "Areia, terracota, âmbar solar e verde-cacto",
     bgImage: "/assets/images/caatinga_smart.jpg",
     particleType: "dust",
     glowColor: "rgba(249, 115, 22, 0.4)",
@@ -183,7 +189,7 @@ export const THEMES: Record<ThemeId, ThemeDefinition> = {
       { name: "Mocó", scientificName: "Kerodon rupestris", category: "Habitante de Rochedos", status: "Abrigo Seguro" }
     ],
     smartDevices: [
-      { name: "Sensores de Umidade do Solo", type: "Sensor Capacitivo LoRa", status: "online", telemetry: "19.5% UR • Alerta de Estiagem" },
+      { name: "Sensores de Umidade do Solo", type: "Sensor Capacitivo LoRa", status: "online", telemetry: "19.5% UR • Alerta Hídrico" },
       { name: "Sistemas Inteligentes de Irrigação", type: "Válvulas de Gotejamento AI", status: "monitoring", telemetry: "Fluxo Programado 18:30" },
       { name: "Sensores de Nível de Cisterna", type: "Sensor Hidrostático Ultrassônico", status: "online", telemetry: "Capacidade: 78.4% (39.200L)" },
       { name: "Estação Meteorológica Solar", type: "Piranômetro & Higrômetro", status: "transmitting", telemetry: "Índice UV 9.2 • 33.8°C" },
@@ -193,9 +199,10 @@ export const THEMES: Record<ThemeId, ThemeDefinition> = {
   bambucal: {
     id: "bambucal",
     name: "Bambuçal",
-    environmentTitle: "Ecossistema Sustentável Inteligente",
-    biome: "Floresta de Bambu & Bosque Zen",
-    colorsDescription: "Verde-bambu, verde-oliva e amarelo-palha",
+    environmentTitle: "Bosque de Bambu Inteligente",
+    biome: "Bambuzais, Vegetação Característica & Fauna Local",
+    shortCaracteristica: "Bambuzais, vegetação densa e fauna local monitorada",
+    colorsDescription: "Verde-bambu, verde-oliva e amarelo-dourado",
     bgImage: "/assets/images/bambuzal_smart.jpg",
     particleType: "leaves",
     glowColor: "rgba(163, 230, 53, 0.4)",
@@ -225,61 +232,62 @@ export const THEMES: Record<ThemeId, ThemeDefinition> = {
       { name: "Panda-gigante", scientificName: "Ailuropoda melanoleuca", category: "Embaixador Ecológico", status: "Alimentando-se de Bambu" },
       { name: "Panda-vermelho", scientificName: "Ailurus fulgens", category: "Mamífero Arborícola", status: "Empoleirado na Haste" },
       { name: "Faisão-dourado", scientificName: "Chrysolophus pictus", category: "Ave Ornamental Rara", status: "Na Trilha Principal" },
-      { name: "Macaco-de-nariz-arrebitado", scientificName: "Rhinopithecus", category: "Primate de Montanha", status: "Em Confraternização" },
-      { name: "Pássaros da Floresta", scientificName: "Garrulax canorus", category: "Bioacústica Harmoniosa", status: "Cantos Registrados" }
+      { name: "Macaco-de-nariz-arrebitado", scientificName: "Rhinopithecus", category: "Primata de Montanha", status: "Em Confraternização" },
+      { name: "Pássaros do Bambuzal", scientificName: "Garrulax canorus", category: "Bioacústica Harmoniosa", status: "Cantos Registrados" }
     ],
     smartDevices: [
-      { name: "Lâmpadas Inteligentes & Eco-Lanternas", type: "LED Biológico Solar 3000K", status: "active", telemetry: "Iluminação Suave 55%" },
-      { name: "Assistentes Virtuais de Biosfera", type: "Processamento de Voz Edge AI", status: "online", telemetry: "Escuta Ativa • Respostas Rápidas" },
+      { name: "Eco-Sensores de Biomassa", type: "Detector CO2 & Crescimento", status: "transmitting", telemetry: "CO2: 388 ppm • Equilíbrio Puro" },
+      { name: "Câmeras de Monitoramento de Fauna", type: "Visão Computacional Edge AI", status: "online", telemetry: "Rastreamento Contínuo" },
       { name: "Sensores de Presença Infravermelho", type: "PIR Micro-ondas 360°", status: "monitoring", telemetry: "Trilha Livre • Trânsito Baixo" },
-      { name: "Sistemas Automatizados de Iluminação", type: "Ciclo Circadiano Automático", status: "online", telemetry: "Transição Crepuscular Ativa" },
-      { name: "Sensores Ambientais Conectados", type: "Detector CO2 & Biomassa", status: "transmitting", telemetry: "CO2: 388 ppm • Equilíbrio Puro" }
+      { name: "Sistemas Automatizados de Iluminação", type: "LED Biológico Solar 3000K", status: "active", telemetry: "Ciclo Crepuscular Ativo" },
+      { name: "Estação Acústica Florestal", type: "Matriz Bioacústica IoT", status: "online", telemetry: "42 dB • Fauna Preservada" }
     ]
   },
-  pantanal: {
-    id: "pantanal",
-    name: "Pantanal",
-    environmentTitle: "Ecossistema Aquático Inteligente",
-    biome: "Planície Alagável & Lagoas Cristalinas",
-    colorsDescription: "Azul-turquesa, verde-água e tons naturais",
-    bgImage: "/assets/images/pantanal_smart.jpg",
+  manguezal: {
+    id: "manguezal",
+    name: "Manguezal",
+    environmentTitle: "Ecossistema Costeiro Inteligente",
+    biome: "Raízes Aéreas, Mangues, Marés & Fauna Costeira",
+    shortCaracteristica: "Raízes aéreas, água estuarina, caranguejos e peixes",
+    colorsDescription: "Verde-mangue, turquesa estuarino e azul-oceânico",
+    bgImage: manguezalSmartImg,
     particleType: "ripples",
-    glowColor: "rgba(34, 211, 238, 0.4)",
+    glowColor: "rgba(45, 212, 191, 0.42)",
     iconName: "Waves",
-    swatches: ["#021617", "#0d9488", "#06b6d4", "#2dd4bf"],
+    swatches: ["#02181a", "#0f766e", "#14b8a6", "#2dd4bf"],
     colors: {
-      bgApp: "#010e0f",
-      bgSurface: "#031c1e",
-      bgCard: "#062c30",
-      bgElevated: "#093b40",
-      bgInput: "#021415",
-      borderMain: "#06b6d4",
-      borderSubtle: "#0a565d",
-      primary: "#22d3ee",
-      primaryHover: "#67e8f9",
-      primaryText: "#021b1e",
-      accent: "#14b8a6",
-      accentText: "#021b1e",
-      textPrimary: "#ecfeff",
-      textSecondary: "#a5f3fc",
-      textMuted: "#99f6e4",
-      chipBg: "#05292c",
-      chipHoverBg: "#22d3ee",
-      glow: "rgba(34, 211, 238, 0.25)"
+      bgApp: "#011012",
+      bgSurface: "#031e22",
+      bgCard: "#062f35",
+      bgElevated: "#094047",
+      bgInput: "#021619",
+      borderMain: "#14b8a6",
+      borderSubtle: "#0d5760",
+      primary: "#2dd4bf",
+      primaryHover: "#5eead4",
+      primaryText: "#02181a",
+      accent: "#10b981",
+      accentText: "#02181a",
+      textPrimary: "#f0fdfa",
+      textSecondary: "#99f6e4",
+      textMuted: "#5eead4",
+      chipBg: "#052a2f",
+      chipHoverBg: "#2dd4bf",
+      glow: "rgba(45, 212, 191, 0.28)"
     },
     animals: [
-      { name: "Onça-pintada do Pantanal", scientificName: "Panthera onca palustris", category: "Maior Felino das Américas", status: "Margem do Rio Monitorada" },
-      { name: "Capivara", scientificName: "Hydrochoerus hydrochaeris", category: "Maior Roedor do Planeta", status: "Família na Lagoa" },
-      { name: "Jacaré-do-pantanal", scientificName: "Caiman yacare", category: "Réptil Aquático", status: "Banhando-se ao Sol" },
-      { name: "Tuiuiú", scientificName: "Jabiru mycteria", category: "Símbolo Alado do Pantanal", status: "Ninho Ativo no Baobá" },
-      { name: "Ariranha", scientificName: "Pteronura brasiliensis", category: "Lontra Gigante Fluvial", status: "Natação Rápida em Cardume" }
+      { name: "Caranguejo-uçá", scientificName: "Ucides cordatus", category: "Crustáceo das Raízes", status: "Toca Monitorada na Maré" },
+      { name: "Guará-vermelho", scientificName: "Eudocimus ruber", category: "Ave Costeira Símbolo", status: "Forrageamento no Lodo" },
+      { name: "Robalo-flecha", scientificName: "Centropomus undecimalis", category: "Peixe Estuarino", status: "Berçário das Raízes Aéreas" },
+      { name: "Garça-azul", scientificName: "Egretta caerulea", category: "Avifauna do Mangue", status: "Voo Baixo no Canal" },
+      { name: "Chama-maré", scientificName: "Uca maracoani", category: "Crustáceo Bioindicador", status: "Colônia Saudável Ativa" }
     ],
     smartDevices: [
-      { name: "Radares de Nível de Rio & Cheias", type: "Sensor Radar Fluvial 24GHz", status: "online", telemetry: "Nível: +2.84m • Estável" },
-      { name: "Boias de Monitoramento da Água", type: "Sonda Multiparâmetro Flutuante", status: "transmitting", telemetry: "Turbidez 2.4 NTU • Temp 24.8°C" },
-      { name: "Câmeras Noturnas de Fauna Aquática", type: "Sensor Infravermelho Submerso", status: "monitoring", telemetry: "Fluxo Contínuo 60 fps" },
-      { name: "Drones de Observação Aérea", type: "UAV Anfíbio de Longo Alcance", status: "active", telemetry: "Varredura 5.2 km² • Bateria 91%" },
-      { name: "Sensores de Qualidade & Oxigênio", type: "Sonda Óptica de OD Dissolvido", status: "online", telemetry: "OD 7.3 mg/L • pH 6.9 Neutro" }
+      { name: "Sensores de Salinidade Estuarina", type: "Sonda Condutivimétrica IoT", status: "online", telemetry: "Salinidade 24.5 PSU • Estável" },
+      { name: "Medidores de Nível de Maré", type: "Sensor Radar Ultrassônico", status: "transmitting", telemetry: "Maré Enchente +1.62m" },
+      { name: "Câmeras Submersas de Fauna Costeira", type: "Visão Subaquática HD", status: "monitoring", telemetry: "Cardumes Juvenis Detectados" },
+      { name: "Sondas de Oxigênio & pH do Mangue", type: "Multiparâmetro Costeiro", status: "online", telemetry: "OD 6.8 mg/L • pH 7.2" },
+      { name: "Drones de Mapeamento de Raízes", type: "Eco-UAV Costeiro Autônomo", status: "active", telemetry: "Cobertura Mangue 98% • Bat 92%" }
     ]
   }
 };
@@ -289,6 +297,15 @@ export const THEME_LIST = [
   THEMES.taiga,
   THEMES.caatinga,
   THEMES.bambucal,
-  THEMES.pantanal
+  THEMES.manguezal
 ];
 
+export function isValidThemeId(id: string | null | undefined): id is ThemeId {
+  return id === "amazonia" || id === "taiga" || id === "caatinga" || id === "bambucal" || id === "manguezal";
+}
+
+export function normalizeThemeId(id: string | null | undefined): ThemeId {
+  if (id === "pantanal") return "manguezal";
+  if (isValidThemeId(id)) return id;
+  return "amazonia";
+}

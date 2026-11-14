@@ -55,27 +55,29 @@ import {
   Cpu,
   Activity,
   Feather,
-  Users
+  Users,
+  Home,
+  ArrowLeft,
+  Trophy
 } from "lucide-react";
 import { Trigger } from "./types";
 import { safeStorage } from "./safeStorage";
-import { ThemeId, THEMES, THEME_LIST } from "./themes";
-import { 
-  THEME_MEDIA_MAP, 
-  TAIGA_THEME_MEDIA, 
-  CENTRAL_FIXED_MEDIA, 
-  TAIGA_GROUP_DAVI,
-  TAIGA_GROUP_GERAL,
-  TAIGA_PRESENTATION_GROUPS,
-  ALL_BIOME_GROUPS,
-  PresentationGroup,
-  matchCentralTrigger, 
-  matchTaigaTrigger,
-  matchDaviTaigaTrigger,
-  matchTriggerForGroup
-} from "./themeTriggers";
+import { ThemeId, THEMES, THEME_LIST, isValidThemeId, normalizeThemeId } from "./themes";
+import {
+  GROUPS_CONFIG,
+  ALL_GROUPS_LIST,
+  ALL_QUIZZES_LIST,
+  DEFAULT_GROUP_ID,
+  GroupDefinition,
+  GroupTrigger,
+  getGroupById,
+  getVideoById,
+  matchTriggerForActiveGroup
+} from "./groupsConfig";
 import { SmartAmbientParticles } from "./components/SmartAmbientParticles";
 import { SmartEcosystemModal } from "./components/SmartEcosystemDrawer";
+import { AppLogo } from "./components/AppLogo";
+import { EcosystemQuizModal } from "./components/EcosystemQuizModal";
 
 export type ExperienceState = 
   | "INTRODUCAO"   // reprodução do vídeo inicial
@@ -89,6 +91,7 @@ interface CustomQuestion {
   phrase: string;
   videoUrl: string;
   videoName: string;
+  isEndingTrigger?: boolean;
 }
 
 export type VideoQualityPreference = "hd1080" | "hd720" | "large" | "medium" | "auto";
@@ -112,191 +115,73 @@ export function isYouTubeUrl(url: string): boolean {
   return Boolean(getYouTubeVideoId(url));
 }
 
-// Pre-configured default videos so the tool pulls videos by URL immediately across any device
-export const DEFAULT_INTRO_URL = "https://youtu.be/GwhjqwYkk6o";
-export const DEFAULT_INTRO_NAME = "Apresentação: Assistente Virtual (HD)";
-
-export const DEFAULT_QUESTIONS: CustomQuestion[] = [
-  { 
-    id: "questionA", 
-    phrase: "mostrar natureza", 
-    videoUrl: "https://www.youtube.com/watch?v=Thdhg_Q6wX8", 
-    videoName: "Natureza Tropical 4K (YouTube)" 
-  },
-  { 
-    id: "questionB", 
-    phrase: "mostrar chuva", 
-    videoUrl: "https://www.youtube.com/watch?v=mPZkdNFkNps", 
-    videoName: "Chuva na Floresta (YouTube)" 
-  }
-];
-
 export default function App() {
   // Navigation: state to change between the interactive screen "chat" and "settings"
   const [activeTab, setActiveTab] = useState<"chat" | "settings">("chat");
 
-  // Dynamic Questions List State
-  const [questions, setQuestions] = useState<CustomQuestion[]>(() => {
-    try {
-      const saved = safeStorage.getItem("eco_custom_questions");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const validated = parsed
-            .filter((q: any) => q && typeof q === "object")
-            .map((q: any, idx: number) => ({
-              id: typeof q.id === "string" && q.id ? q.id : `question_${Date.now()}_${idx}`,
-              phrase: typeof q.phrase === "string" ? q.phrase : `pergunta ${idx + 1}`,
-              videoUrl: typeof q.videoUrl === "string" && !q.videoUrl.startsWith("blob:") ? q.videoUrl : (typeof q.videoUrl === "string" ? q.videoUrl : ""),
-              videoName: typeof q.videoName === "string" ? q.videoName : ""
-            }));
-          if (validated.length > 0) {
-            return validated;
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("Failed to load eco_custom_questions:", e);
-    }
+  // Fluxo da Plataforma: Tela Inicial -> Seleção de Grupo -> Apresentação Interativa
+  const [hasEnteredApp, setHasEnteredApp] = useState<boolean>(false);
+  const [hasSelectedGroup, setHasSelectedGroup] = useState<boolean>(false);
+  const [presentationEnded, setPresentationEnded] = useState<boolean>(false);
 
-    return DEFAULT_QUESTIONS;
-  });
-
-  // URLs for video playback (YouTube link, web URL, or local file)
-  const [introUrl, setIntroUrl] = useState<string>(() => {
-    try {
-      const saved = safeStorage.getItem("eco_intro_url");
-      if (saved && typeof saved === "string" && saved.trim()) {
-        return saved.trim();
-      }
-      safeStorage.setItem("eco_intro_url", DEFAULT_INTRO_URL);
-    } catch (_) {}
-    return DEFAULT_INTRO_URL;
-  });
-  const [introName, setIntroName] = useState<string>(() => {
-    try {
-      const saved = safeStorage.getItem("eco_intro_name");
-      if (saved && typeof saved === "string" && saved.trim()) {
-        return saved.trim();
-      }
-      safeStorage.setItem("eco_intro_name", DEFAULT_INTRO_NAME);
-    } catch (_) {}
-    return DEFAULT_INTRO_NAME;
-  });
-
-  // Perguntas Sugeridas para o Usuário (Persistidas no LocalStorage)
-  const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>(() => {
-    try {
-      const saved = safeStorage.getItem("wit_suggested_questions");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          const validStrings = parsed
-            .map((item: any) => typeof item === "string" ? item.trim() : (item && typeof item === "object" && item.text ? String(item.text).trim() : ""))
-            .filter((item: string) => item.length > 0);
-          if (validStrings.length > 0) {
-            return validStrings;
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("Failed to load wit_suggested_questions:", e);
-    }
-    return [
-      "mostrar natureza",
-      "mostrar chuva",
-      "como funciona a assistente?",
-      "reiniciar apresentação"
-    ];
-  });
-  const [newSuggestedInput, setNewSuggestedInput] = useState("");
-
-  // Visual Identity System: Theme Selection (Amazônia, Taiga, Caatinga, Bambuçal, Pantanal)
+  // Sistema Visual Oficial (5 Biomas: Amazônia, Taiga, Caatinga, Bambuçal, Manguezal)
   const [selectedThemeId, setSelectedThemeId] = useState<ThemeId>(() => {
     try {
-      const saved = safeStorage.getItem("wit_selected_theme");
-      if (saved && (saved === "amazonia" || saved === "taiga" || saved === "caatinga" || saved === "bambucal" || saved === "pantanal")) {
-        return saved as ThemeId;
+      const saved = safeStorage.getItem("natureza_selected_theme") || safeStorage.getItem("wit_selected_theme");
+      if (saved) {
+        return normalizeThemeId(saved);
       }
     } catch (_) {}
-    return "taiga";
+    return "amazonia";
   });
 
-  // Grupo de Apresentação Ativo (Vinculado à Taiga ou bioma selecionado)
+  // Grupo de Apresentação Centralizado (3 Grupos Oficiais disponíveis em TODOS os 5 temas)
   const [selectedGroupId, setSelectedGroupId] = useState<string>(() => {
     try {
-      const saved = safeStorage.getItem("wit_selected_group_id");
-      if (saved) return saved;
+      const saved = safeStorage.getItem("natureza_selected_group_id") || safeStorage.getItem("wit_selected_group_id");
+      if (saved && GROUPS_CONFIG[saved]) return saved;
     } catch (_) {}
-    return "taiga_davi_samara_milena_joao";
+    return DEFAULT_GROUP_ID;
   });
 
-  const currentTheme = THEMES[selectedThemeId] || THEMES.taiga;
-  const isTaiga = selectedThemeId === "taiga";
+  const currentTheme = THEMES[selectedThemeId] || THEMES.amazonia;
 
-  // Resolução do grupo de apresentação associado exclusivamente ao tema
-  const currentGroup: PresentationGroup = useMemo(() => {
-    if (selectedThemeId === "taiga") {
-      const found = TAIGA_PRESENTATION_GROUPS.find(g => g.id === selectedGroupId);
-      return found || TAIGA_GROUP_DAVI;
-    }
-    const themeGroups = ALL_BIOME_GROUPS[selectedThemeId];
-    return themeGroups?.[0] || TAIGA_GROUP_DAVI;
-  }, [selectedThemeId, selectedGroupId]);
+  // Resolução universal do grupo ativo a partir do arquivo centralizado groupsConfig.ts
+  const currentGroup: GroupDefinition = useMemo(() => {
+    return getGroupById(selectedGroupId);
+  }, [selectedGroupId]);
 
   // Estados da Experiência: INTRODUCAO | ESCUTANDO | PROCESSANDO | REPRODUZINDO | AGUARDANDO
   const [experienceState, setExperienceState] = useState<ExperienceState>("AGUARDANDO");
 
-  // Estrutura Dinâmica de Vídeos e Gatilhos do Grupo Ativo
-  const effectiveIntroUrl = currentGroup.intro.videoUrl;
-  const effectiveIntroName = currentGroup.intro.videoName;
+  // Estrutura Dinâmica de Vídeos e Gatilhos do Grupo Ativo (suporta gatilhos ou vídeo único completo)
+  const isFullVideoGroup = currentGroup.presentationType === "full_video";
+  const effectiveIntroUrl = currentGroup.intro?.videoUrl || currentGroup.fullVideo?.videoUrl || "";
+  const effectiveIntroName = currentGroup.intro?.videoName || currentGroup.fullVideo?.videoName || currentGroup.name;
   const effectiveQuestions: CustomQuestion[] = useMemo(() => {
     return currentGroup.triggers.map(t => ({
       id: t.id,
       phrase: t.phrase,
       videoUrl: t.videoUrl,
       videoName: t.videoName,
+      isEndingTrigger: t.isEndingTrigger,
     }));
   }, [currentGroup]);
-  const displaySuggestedQuestions = currentGroup.suggestedQuestions;
 
   const [showEcosystemModal, setShowEcosystemModal] = useState<boolean>(false);
-
-  const handleSelectGroup = (groupId: string) => {
-    setSelectedGroupId(groupId);
-    try {
-      safeStorage.setItem("wit_selected_group_id", groupId);
-    } catch (_) {}
-    setHasStarted(false);
-    setVideoFinished(false);
-    setActiveVideoSlot("intro");
-    setViewedSlots([]);
-    setUsedTriggerIds([]);
-    const target = TAIGA_PRESENTATION_GROUPS.find(g => g.id === groupId);
-    setAiResponseText(`Apresentação do grupo "${target?.name || groupId}" carregada. Toque em "Iniciar Apresentação".`);
-    showSaveSuccess(`Grupo "${target?.name || groupId}" selecionado!`);
-  };
+  const [quizModalOpen, setQuizModalOpen] = useState<boolean>(false);
+  const [quizTargetThemeId, setQuizTargetThemeId] = useState<ThemeId>("amazonia");
 
   const handleSelectTheme = (themeId: ThemeId) => {
-    setSelectedThemeId(themeId);
+    const safeId = normalizeThemeId(themeId);
+    setSelectedThemeId(safeId);
     try {
-      safeStorage.setItem("wit_selected_theme", themeId);
+      safeStorage.setItem("natureza_selected_theme", safeId);
+      safeStorage.setItem("wit_selected_theme", safeId);
     } catch (e) {
       console.warn("Failed to persist selected theme:", e);
     }
-
-    if (themeId === "taiga") {
-      setSelectedGroupId("taiga_davi_samara_milena_joao");
-    }
-
-    setHasStarted(false);
-    setVideoFinished(false);
-    setActiveVideoSlot("intro");
-    setViewedSlots([]);
-    setUsedTriggerIds([]);
-
-    setAiResponseText(`Bioma ${THEMES[themeId]?.name || themeId} sintonizado. Apresentação interativa pronta.`);
-    showSaveSuccess(`Tema "${THEMES[themeId]?.name || themeId}" aplicado com sucesso!`);
+    showSaveSuccess(`Tema "${THEMES[safeId]?.name || safeId}" aplicado!`);
   };
 
   const renderThemeIcon = (iconName: string, className = "w-4.5 h-4.5") => {
@@ -316,14 +201,6 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    try {
-      safeStorage.setItem("wit_suggested_questions", JSON.stringify(suggestedQuestions));
-    } catch (e) {
-      console.warn("Failed to save wit_suggested_questions:", e);
-    }
-  }, [suggestedQuestions]);
-
   // Toast / Notificação de Salvamento
   const [saveToast, setSaveToast] = useState<{ message: string; visible: boolean; type?: "success" | "info" } | null>(null);
 
@@ -334,22 +211,11 @@ export default function App() {
     }, 4000);
   };
 
-  // Salvar Todos os Dados do App (Backup Local)
+  // Salvar Preferências do App (Armazenamento Local)
   const handleSaveAllData = () => {
     try {
-      const configToSave = questions.map(q => ({
-        id: q.id,
-        phrase: q.phrase,
-        videoUrl: q.videoUrl && !q.videoUrl.startsWith("blob:") ? q.videoUrl : "",
-        videoName: q.videoName
-      }));
-      safeStorage.setItem("eco_custom_questions", JSON.stringify(configToSave));
-      safeStorage.setItem("wit_suggested_questions", JSON.stringify(suggestedQuestions));
-      safeStorage.setItem("wit_selected_theme", selectedThemeId);
-      if (introUrl && !introUrl.startsWith("blob:")) {
-        safeStorage.setItem("eco_intro_url", introUrl);
-      }
-      safeStorage.setItem("eco_intro_name", introName);
+      safeStorage.setItem("natureza_selected_theme", selectedThemeId);
+      safeStorage.setItem("natureza_selected_group_id", selectedGroupId);
       safeStorage.setItem("eco_video_quality", preferredVideoQuality);
       safeStorage.setItem("eco_video_fit", videoFit);
       safeStorage.setItem("eco_force_1080p_only", String(force1080pOnly));
@@ -357,12 +223,12 @@ export default function App() {
       safeStorage.setItem("eco_speech_engine", preferredSpeechEngine);
       safeStorage.setItem("eco_show_bg_image", String(showBgImage));
       safeStorage.setItem("eco_bg_opacity", String(bgOpacity));
-      safeStorage.setItem("wit_last_saved", new Date().toISOString());
+      safeStorage.setItem("natureza_last_saved", new Date().toISOString());
 
-      showSaveSuccess("Todos os dados do app e o tema visual foram salvos!");
+      showSaveSuccess("Preferências visuais, grupo e reprodutor salvos!");
     } catch (err: any) {
       console.warn("Erro ao salvar dados:", err);
-      showSaveSuccess("Aviso: Dados mantidos na sessão atual.");
+      showSaveSuccess("Aviso: Preferências mantidas na sessão atual.");
     }
   };
 
@@ -370,21 +236,11 @@ export default function App() {
   const handleExportBackup = () => {
     try {
       const backupData = {
-        app: "WIT - Assistente Virtual",
-        version: "2.6",
+        app: "ASSISTENTES DA NATUREZA - 9º A OSMARINHO",
+        version: "3.0",
         exportedAt: new Date().toISOString(),
         theme: selectedThemeId,
-        intro: {
-          url: introUrl && !introUrl.startsWith("blob:") ? introUrl : DEFAULT_INTRO_URL,
-          name: introName || DEFAULT_INTRO_NAME
-        },
-        questions: questions.map(q => ({
-          id: q.id,
-          phrase: q.phrase,
-          videoUrl: q.videoUrl && !q.videoUrl.startsWith("blob:") ? q.videoUrl : "",
-          videoName: q.videoName
-        })),
-        suggestedQuestions,
+        groupId: selectedGroupId,
         settings: {
           preferredVideoQuality,
           videoFit,
@@ -400,7 +256,7 @@ export default function App() {
       const downloadAnchor = document.createElement("a");
       const dateStr = new Date().toISOString().slice(0, 10);
       downloadAnchor.setAttribute("href", dataStr);
-      downloadAnchor.setAttribute("download", `backup-wit-assistente-${dateStr}.json`);
+      downloadAnchor.setAttribute("download", `backup-assistentes-natureza-9a-${dateStr}.json`);
       document.body.appendChild(downloadAnchor);
       downloadAnchor.click();
       downloadAnchor.remove();
@@ -420,41 +276,15 @@ export default function App() {
         const text = e.target?.result as string;
         const data = JSON.parse(text);
 
-        if (data.theme && (data.theme === "amazonia" || data.theme === "taiga" || data.theme === "caatinga" || data.theme === "bambucal" || data.theme === "pantanal")) {
-          setSelectedThemeId(data.theme);
-          safeStorage.setItem("wit_selected_theme", data.theme);
+        if (data.theme && typeof data.theme === "string") {
+          const safeTheme = normalizeThemeId(data.theme);
+          setSelectedThemeId(safeTheme);
+          safeStorage.setItem("natureza_selected_theme", safeTheme);
         }
 
-        if (Array.isArray(data.questions) && data.questions.length > 0) {
-          const validated = data.questions
-            .filter((q: any) => q && typeof q === "object")
-            .map((q: any, idx: number) => ({
-              id: typeof q.id === "string" && q.id ? q.id : `question_${Date.now()}_${idx}`,
-              phrase: typeof q.phrase === "string" ? q.phrase : `pergunta ${idx + 1}`,
-              videoUrl: typeof q.videoUrl === "string" && !q.videoUrl.startsWith("blob:") ? q.videoUrl : "",
-              videoName: typeof q.videoName === "string" ? q.videoName : ""
-            }));
-          setQuestions(validated);
-          safeStorage.setItem("eco_custom_questions", JSON.stringify(validated));
-        }
-
-        if (Array.isArray(data.suggestedQuestions) && data.suggestedQuestions.length > 0) {
-          const validStrings = data.suggestedQuestions
-            .map((item: any) => typeof item === "string" ? item.trim() : (item && typeof item === "object" && item.text ? String(item.text).trim() : ""))
-            .filter((item: string) => item.length > 0);
-          if (validStrings.length > 0) {
-            setSuggestedQuestions(validStrings);
-            safeStorage.setItem("wit_suggested_questions", JSON.stringify(validStrings));
-          }
-        }
-
-        if (data.intro?.url && typeof data.intro.url === "string") {
-          setIntroUrl(data.intro.url);
-          safeStorage.setItem("eco_intro_url", data.intro.url);
-        }
-        if (data.intro?.name && typeof data.intro.name === "string") {
-          setIntroName(data.intro.name);
-          safeStorage.setItem("eco_intro_name", data.intro.name);
+        if (data.groupId && typeof data.groupId === "string" && GROUPS_CONFIG[data.groupId]) {
+          setSelectedGroupId(data.groupId);
+          safeStorage.setItem("natureza_selected_group_id", data.groupId);
         }
 
         if (data.settings) {
@@ -462,39 +292,20 @@ export default function App() {
             setPreferredVideoQuality(data.settings.preferredVideoQuality);
           }
           if (data.settings.videoFit) {
-            setVideoFit(data.settings.videoFit);
+            setVideoFit("contain");
           }
           if (typeof data.settings.force1080pOnly === "boolean") {
             setForce1080pOnly(data.settings.force1080pOnly);
           }
         }
 
-        showSaveSuccess(`Backup restaurado! Tema e configurações carregados.`);
+        showSaveSuccess("Backup restaurado com sucesso!");
       } catch (err: any) {
         console.warn("Falha ao carregar arquivo de backup:", err);
         showSaveSuccess("Erro: O arquivo selecionado não é um backup válido.");
       }
     };
     reader.readAsText(file);
-  };
-
-  const addSuggestedQuestion = (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    if (suggestedQuestions.includes(trimmed)) return;
-    setSuggestedQuestions(prev => [...prev, trimmed]);
-    setNewSuggestedInput("");
-  };
-
-  const removeSuggestedQuestion = (indexToRemove: number) => {
-    setSuggestedQuestions(prev => prev.filter((_, idx) => idx !== indexToRemove));
-  };
-
-  const copyTriggersToSuggested = () => {
-    const phrases = effectiveQuestions.map(q => q.phrase.trim()).filter(Boolean);
-    const combined = Array.from(new Set([...suggestedQuestions, ...phrases]));
-    setSuggestedQuestions(combined);
-    showSaveSuccess(`${phrases.length} perguntas dos canais foram adicionadas às sugestões!`);
   };
 
   // Active slot corresponds to either "intro" or any question id
@@ -544,12 +355,26 @@ export default function App() {
   const audioChunksRef = useRef<Blob[]>([]);
   const recognitionRef = useRef<any>(null);
 
-  // Identificadores estáveis para controle do ciclo de vida dos gatilhos e diagnósticos
+  // Identificadores estáveis e referências síncronas para eliminar closures obsoletas
   const executionIdRef = useRef<number>(0);
   const activeExecutionIdRef = useRef<number>(0);
   const hasEndedCurrentExecutionRef = useRef<number>(-1);
   const handleVideoEndedRef = useRef<(source: string, execId?: number) => void>(() => {});
   const videoFinishedRef = useRef<boolean>(false);
+  const currentGroupRef = useRef<GroupDefinition>(currentGroup);
+  const activeVideoSlotRef = useRef<string>(activeVideoSlot);
+  const micPermissionRef = useRef<"unknown" | "granted" | "denied" | "prompt" | "unsupported">(micPermission);
+  const presentationEndedRef = useRef<boolean>(presentationEnded);
+  const isListeningRef = useRef<boolean>(isListening);
+  const isRecordingMediaRef = useRef<boolean>(isRecordingMedia);
+  const handleIncomingCommandRef = useRef<(text: string) => void>(() => {});
+  const attachedIframeNodeRef = useRef<HTMLIFrameElement | null>(null);
+
+  currentGroupRef.current = currentGroup;
+  micPermissionRef.current = micPermission;
+  presentationEndedRef.current = presentationEnded;
+  isListeningRef.current = isListening;
+  isRecordingMediaRef.current = isRecordingMedia;
   
   // Mobile & Fullscreen States
   const [isMobile, setIsMobile] = useState<boolean>(() => {
@@ -738,38 +563,21 @@ export default function App() {
     };
   }, [videoFit, isFullscreen, hasStarted]);
 
-  // Track triggers that have already been played during this session, removing them from available view ("apagando os que já foram utilizados")
-  const [usedTriggerIds, setUsedTriggerIds] = useState<string[]>(() => {
-    try {
-      const saved = safeStorage.getItem("eco_used_trigger_ids");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed.filter((id: any) => typeof id === "string");
-      }
-    } catch (_) {}
-    return [];
-  });
-
-  useEffect(() => {
-    try {
-      safeStorage.setItem("eco_used_trigger_ids", JSON.stringify(usedTriggerIds));
-    } catch (_) {}
-  }, [usedTriggerIds]);
-
-  const restoreUsedTriggers = () => {
-    setUsedTriggerIds([]);
-    try {
-      safeStorage.removeItem("eco_used_trigger_ids");
-    } catch (_) {}
-    setAiResponseText("Ciclo de gatilhos restaurado. Todos os comandos estão disponíveis novamente.");
-  };
-
   // YouTube IFrame API Player Instance reference for direct JavaScript control
   const ytPlayerInstanceRef = useRef<any>(null);
 
-  // Load official YouTube IFrame API script once
+  // Load official YouTube IFrame API script once & hook onYouTubeIframeAPIReady
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const prevReady = (window as any).onYouTubeIframeAPIReady;
+    (window as any).onYouTubeIframeAPIReady = () => {
+      if (typeof prevReady === "function") {
+        try { prevReady(); } catch (_) {}
+      }
+      if (hasStarted && !videoFinishedRef.current && ytIframeRef.current) {
+        attachYtPlayer();
+      }
+    };
     if (!document.getElementById("youtube-iframe-api")) {
       const tag = document.createElement("script");
       tag.id = "youtube-iframe-api";
@@ -866,15 +674,18 @@ export default function App() {
   // Attach YouTube Player API instance to the iframe for real-time HD enforcement and ended event capture
   const attachYtPlayer = () => {
     if (typeof window === "undefined") return;
+    const iframeEl = ytIframeRef.current;
+    if (!iframeEl || attachedIframeNodeRef.current === iframeEl) return;
+
     const currentExec = activeExecutionIdRef.current;
     try {
       const YT = (window as any).YT;
-      if (YT && YT.Player && ytIframeRef.current) {
-        console.log(`[EXEC #${currentExec}] Player inicializado via YouTube IFrame API.`);
-        ytPlayerInstanceRef.current = new YT.Player(ytIframeRef.current, {
+      if (YT && YT.Player) {
+        attachedIframeNodeRef.current = iframeEl;
+        ytPlayerInstanceRef.current = new YT.Player(iframeEl, {
           events: {
             onReady: (e: any) => {
-              console.log(`[EXEC #${currentExec}] Player pronto (onReady).`);
+              if (activeExecutionIdRef.current !== currentExec) return;
               try {
                 e.target.setPlaybackQuality?.("hd1080");
                 e.target.setPlaybackQualityRange?.("hd1080", "highres");
@@ -886,6 +697,8 @@ export default function App() {
               } catch (_) {}
             },
             onStateChange: (e: any) => {
+              if (activeExecutionIdRef.current !== currentExec) return;
+
               // Bloqueio imediato se o vídeo já estiver marcado como finalizado
               if (videoFinishedRef.current && (e.data === 1 || e.data === 3)) {
                 try {
@@ -905,7 +718,6 @@ export default function App() {
               }
               // 0 = ENDED (YT.PlayerState.ENDED) - Interrompe loop imediatamente
               if (e.data === 0) {
-                console.log(`[EXEC #${currentExec}] Evento YT.PlayerState.ENDED recebido via IFrame API.`);
                 try {
                   e.target.pauseVideo?.();
                   e.target.stopVideo?.();
@@ -922,61 +734,62 @@ export default function App() {
         });
       }
     } catch (err) {
+      attachedIframeNodeRef.current = null;
       console.warn("attachYtPlayer fallback error:", err);
     }
   };
 
-  // Centralized Video Slot Trigger: Execução Confiável em 10 Etapas com Identificador e Diagnósticos
-  const triggerVideoSlot = (slotId: string, announceText?: string) => {
+  // Centralized Video Slot Trigger: Execução Única Confiável com Isolamento por Grupo
+  const triggerVideoSlot = (slotId: string, announceText?: string, groupOverride?: GroupDefinition) => {
     const execId = ++executionIdRef.current;
     activeExecutionIdRef.current = execId;
     hasEndedCurrentExecutionRef.current = -1;
 
-    console.log(`[EXEC #${execId}] 1. Gatilho selecionado: "${slotId}".`);
+    const targetGroup = groupOverride || currentGroupRef.current;
+    if (groupOverride) {
+      currentGroupRef.current = groupOverride;
+    }
 
-    // 1. Validar / preparar player e manter modo ajustado (contain)
+    // Atualizar referências síncronas antes de re-renderizar
+    videoFinishedRef.current = false;
+    presentationEndedRef.current = false;
+    activeVideoSlotRef.current = slotId;
+    attachedIframeNodeRef.current = null;
+    ytPlayerInstanceRef.current = null;
+
+    // 1. Preparar player em modo ajustado (contain) sem fullscreen automático
     setVideoFit("contain");
     try { safeStorage.setItem("eco_video_fit", "contain"); } catch (_) {}
+    setHasEnteredApp(true);
+    setHasSelectedGroup(true);
     setHasStarted(true);
     setVideoFinished(false);
+    setPresentationEnded(false);
+    setShowReplayPrompt(false);
 
-    // 2. Suspender temporariamente o reconhecimento de voz
+    // 2. Suspender reconhecimento de voz durante a reprodução do vídeo
     suspendSpeechRecognition();
-    console.log(`[EXEC #${execId}] 2. Reconhecimento de voz suspenso.`);
 
-    // 3. Registrar / garantir disponibilidade do tratamento do evento de término
-    console.log(`[EXEC #${execId}] 3. Tratamento do evento de término registrado e ativo.`);
-
-    // 4. Atualizar o identificador do gatilho atual
-    const isSameSlot = activeVideoSlot === slotId;
+    // 3. Atualizar slot ativo e forçar remontagem limpa do player para reprodução única
     setActiveVideoSlot(slotId);
-    if (isSameSlot) {
-      setYtReloadKey(prev => prev + 1);
-    }
-
-    if (slotId === "intro") {
-      setExperienceState("INTRODUCAO");
-    } else {
-      setExperienceState("REPRODUZINDO");
-    }
-    console.log(`[EXEC #${execId}] 4. Identificador do gatilho atualizado para "${slotId}". Estado: ${slotId === "intro" ? "INTRODUCAO" : "REPRODUZINDO"}.`);
+    setYtReloadKey(prev => prev + 1);
+    setExperienceState(slotId === "intro" ? "INTRODUCAO" : "REPRODUZINDO");
 
     if (announceText) {
       setAiResponseText(announceText);
     }
 
-    // 8. Marcar o gatilho como utilizado (para sair da lista de disponíveis)
-    if (slotId !== "intro") {
-      setUsedTriggerIds(prev => prev.includes(slotId) ? prev : [...prev, slotId]);
+    if (slotId !== "intro" && slotId !== "full_video") {
+      setViewedSlots(prev => prev.includes(slotId) ? prev : [...prev, slotId]);
     }
 
-    // 5. Início da reprodução do vídeo
-    console.log(`[EXEC #${execId}] 5. Início da reprodução do vídeo.`);
+    // 4. Iniciar pulso de qualidade 1080p e reprodução HTML5 se aplicável
     trigger1080pAutoPulse();
 
     setTimeout(() => {
-      const currentUrl = slotId === "intro" ? effectiveIntroUrl : (effectiveQuestions.find(q => q.id === slotId)?.videoUrl || "");
-      if (!isYouTubeUrl(currentUrl) && videoRef.current) {
+      const targetVideo = getVideoById(targetGroup.id, slotId);
+      const currentUrl = targetVideo?.videoUrl || "";
+      if (currentUrl && !isYouTubeUrl(currentUrl) && videoRef.current) {
         videoRef.current.currentTime = 0;
         const p = videoRef.current.play();
         if (p !== undefined) {
@@ -984,6 +797,52 @@ export default function App() {
         }
       }
     }, 70);
+  };
+
+  // Seleção de Grupo de Apresentação (inicia automaticamente a introdução desse grupo)
+  const handleSelectGroup = (groupId: string, autoStartIntro: boolean = true) => {
+    const target = getGroupById(groupId);
+    setSelectedGroupId(target.id);
+    currentGroupRef.current = target;
+    try {
+      safeStorage.setItem("natureza_selected_group_id", target.id);
+      safeStorage.setItem("wit_selected_group_id", target.id);
+    } catch (_) {}
+
+    setHasEnteredApp(true);
+    setHasSelectedGroup(true);
+    setPresentationEnded(false);
+    presentationEndedRef.current = false;
+    setViewedSlots([]);
+    setLastSpeechDetected("");
+    setRealtimeSpeech("");
+    setSpeechError("");
+    setVideoMuted(false);
+
+    const initialSlot = target.presentationType === "full_video" ? "full_video" : "intro";
+
+    if (autoStartIntro) {
+      triggerVideoSlot(
+        initialSlot,
+        target.presentationType === "full_video"
+          ? `Iniciando apresentação completa do grupo ${target.name}.`
+          : `Iniciando apresentação do grupo ${target.name}.`,
+        target
+      );
+    } else {
+      setHasStarted(false);
+      setVideoFinished(false);
+      videoFinishedRef.current = false;
+      setActiveVideoSlot(initialSlot);
+      activeVideoSlotRef.current = initialSlot;
+      setAiResponseText(`Grupo "${target.name}" selecionado. Toque em "Iniciar Apresentação".`);
+    }
+  };
+
+  const openEcosystemQuiz = (themeOverride?: ThemeId) => {
+    suspendSpeechRecognition();
+    setQuizTargetThemeId(themeOverride || selectedThemeId);
+    setQuizModalOpen(true);
   };
 
   const handleVideoTouch = () => {
@@ -1089,41 +948,29 @@ export default function App() {
     return matchCount / targetWords.length;
   };
 
-  // Sync state metadata to safeStorage
-  useEffect(() => {
-    if (introUrl && !introUrl.startsWith("blob:")) {
-      safeStorage.setItem("eco_intro_url", introUrl);
-    }
-    safeStorage.setItem("eco_intro_name", introName);
-    
-    const configToSave = questions.map(q => ({
-      id: q.id,
-      phrase: q.phrase,
-      videoUrl: q.videoUrl && !q.videoUrl.startsWith("blob:") ? q.videoUrl : "",
-      videoName: q.videoName
-    }));
-    safeStorage.setItem("eco_custom_questions", JSON.stringify(configToSave));
-  }, [questions, introUrl, introName]);
-
-  // Sincroniza referência de término do vídeo para evitar closures obsoletas
+  // Sincroniza referência de término do vídeo e slot ativo
   useEffect(() => {
     videoFinishedRef.current = videoFinished;
   }, [videoFinished]);
 
-  // 6, 7, 8, 9, 10. Tratamento unificado de término de vídeo com proteção contra execuções duplicadas e closures
+  useEffect(() => {
+    activeVideoSlotRef.current = activeVideoSlot;
+  }, [activeVideoSlot]);
+
+  // Tratamento unificado de término de vídeo com suporte ao gatilho finalizador ("Tchau")
   const handleVideoEnded = (source: string = "unknown", execId?: number) => {
     const targetExec = execId ?? activeExecutionIdRef.current;
 
     // Proteção: Garante que o evento de término seja tratado uma única vez por reprodução
     if (hasEndedCurrentExecutionRef.current === targetExec) {
-      console.log(`[EXEC #${targetExec}] Evento de término duplicado ignorado (fonte: ${source}).`);
       return;
     }
     hasEndedCurrentExecutionRef.current = targetExec;
 
-    console.log(`[EXEC #${targetExec}] 6. Evento de vídeo finalizado (fonte: ${source}).`);
+    // Atualização síncrona imediata para bloquear qualquer loop
+    videoFinishedRef.current = true;
 
-    // 1. Interrompe qualquer tentativa de loop no player do YouTube
+    // 1. Interrompe reprodução no player do YouTube
     try {
       if (ytPlayerInstanceRef.current && typeof ytPlayerInstanceRef.current.pauseVideo === "function") {
         ytPlayerInstanceRef.current.pauseVideo();
@@ -1131,7 +978,7 @@ export default function App() {
       }
     } catch (_) {}
 
-    // 2. Envia comandos postMessage para o iframe pausar e parar
+    // 2. Comandos postMessage para pausar e parar o iframe
     try {
       if (ytIframeRef.current?.contentWindow) {
         ytIframeRef.current.contentWindow.postMessage('{"event":"command","func":"pauseVideo","args":""}', '*');
@@ -1139,40 +986,56 @@ export default function App() {
       }
     } catch (_) {}
 
-    // 3. Pausa vídeo direto HTML5 se houver
+    // 3. Pausa vídeo HTML5 direto se houver
     try {
       if (videoRef.current) {
         videoRef.current.pause();
       }
     } catch (_) {}
 
-    // 7. Finalizar o estado de reprodução
+    const endedSlot = activeVideoSlotRef.current;
+    const grp = currentGroupRef.current;
+    const finishedTrigger = grp.triggers.find(t => t.id === endedSlot);
+    const isEnding = Boolean(finishedTrigger?.isEndingTrigger);
+
+    // 4. Encerra estado de reprodução sem voltar automaticamente para a intro
     setVideoFinished(true);
     setShowReplayPrompt(true);
-    setViewedSlots((prev) => {
-      if (prev.includes(activeVideoSlot)) return prev;
-      return [...prev, activeVideoSlot];
-    });
+    setViewedSlots((prev) => (prev.includes(endedSlot) ? prev : [...prev, endedSlot]));
     exitFullscreenAuto();
-    console.log(`[EXEC #${targetExec}] 7. Estado de reprodução encerrado.`);
 
-    // 8. O assistente virtual retorna ao estado de escuta
+    if (grp.presentationType === "full_video" || endedSlot === "full_video") {
+      // Grupo 5 (vídeo único completo): interromper sem ativar microfone nem iniciar quiz automaticamente
+      presentationEndedRef.current = false;
+      setPresentationEnded(false);
+      setExperienceState("AGUARDANDO");
+      suspendSpeechRecognition();
+      setAiResponseText(`Apresentação de ${grp.name} finalizada. Escolha "Assistir Novamente" ou "Fazer Quiz da Caatinga".`);
+      return;
+    }
+
+    if (isEnding) {
+      // Comportamento especial do gatilho "Tchau": encerrar apresentação sem reativar microfone nem exibir gatilhos
+      presentationEndedRef.current = true;
+      setPresentationEnded(true);
+      setExperienceState("AGUARDANDO");
+      suspendSpeechRecognition();
+      setAiResponseText(`Apresentação do grupo ${grp.name} encerrada. Obrigado pela participação!`);
+      return;
+    }
+
+    // 5. Após introdução ou vídeo informativo: retornar ao modo de escuta com os gatilhos disponíveis
+    presentationEndedRef.current = false;
+    setPresentationEnded(false);
     setExperienceState("ESCUTANDO");
-    console.log(`[EXEC #${targetExec}] 8. Estado do assistente alterado para: ESCUTANDO.`);
+    setAiResponseText(`Vídeo finalizado. Fale no microfone ou selecione um dos ${grp.triggers.length} gatilhos abaixo.`);
 
-    // 9. Reativar reconhecimento de voz se o usuário concedeu permissão
+    // 6. Reativar reconhecimento de voz de forma limpa se houver permissão concedida
     setTimeout(() => {
-      if (micPermission === "granted") {
-        console.log(`[EXEC #${targetExec}] 9. Reconhecimento de voz reativado automaticamente.`);
+      if (!presentationEndedRef.current && micPermissionRef.current === "granted") {
         startListeningIfAllowed();
-      } else {
-        console.log(`[EXEC #${targetExec}] 9. Microfone pronto para ativação (permissão não concedida ou pendente).`);
       }
     }, 350);
-
-    // 10. Disponibilizar os próximos gatilhos para a próxima interação
-    const remainingCount = effectiveQuestions.filter(q => !usedTriggerIds.includes(q.id) && q.id !== activeVideoSlot).length;
-    console.log(`[EXEC #${targetExec}] 10. Próximos gatilhos disponibilizados: ${remainingCount} restantes.`);
   };
 
   // Mantém a referência da função sempre atualizada para chamadas externas sem recriar listeners
@@ -1181,27 +1044,28 @@ export default function App() {
   });
 
   const handleReplayVideo = () => {
-    triggerVideoSlot(activeVideoSlot, "Reiniciando vídeo.");
+    triggerVideoSlot(activeVideoSlotRef.current, "Reiniciando vídeo.");
   };
 
-  // Monitoramento contínuo: Handshake do YouTube IFrame e fallback para garantir término sem loop
+  // Monitoramento contínuo: Handshake do YouTube IFrame, late-binding do YT.Player e fallback seguro de término
   useEffect(() => {
     if (!hasStarted) return;
     const interval = setInterval(() => {
       try {
-        // Envia handshake contínuo de listening para o iframe reportar eventos de término
+        if (ytIframeRef.current && attachedIframeNodeRef.current !== ytIframeRef.current && (window as any).YT?.Player) {
+          attachYtPlayer();
+        }
+
         if (ytIframeRef.current?.contentWindow) {
           ytIframeRef.current.contentWindow.postMessage('{"event":"listening","id":1,"channel":"widget"}', '*');
         }
 
-        // Se o vídeo está ativo e ainda não foi finalizado, verifica tempo restante como segurança
         if (!videoFinishedRef.current) {
           const currentExec = activeExecutionIdRef.current;
           if (ytPlayerInstanceRef.current && typeof ytPlayerInstanceRef.current.getCurrentTime === "function") {
             const curr = ytPlayerInstanceRef.current.getCurrentTime();
             const dur = ytPlayerInstanceRef.current.getDuration();
-            if (dur > 0 && curr >= dur - 0.45) {
-              console.log(`[EXEC #${currentExec}] Fallback timer detectou término do vídeo (curr: ${curr.toFixed(2)}, dur: ${dur.toFixed(2)}).`);
+            if (dur > 2 && curr > 1 && curr >= dur - 0.35) {
               try {
                 ytPlayerInstanceRef.current.pauseVideo?.();
                 ytPlayerInstanceRef.current.stopVideo?.();
@@ -1281,23 +1145,26 @@ export default function App() {
     }
   }, [videoMuted, ytReloadKey]);
 
-  // Keyboard shortcut: Escape key allows concluding/skipping video early (ideal for testing & presentations)
+  // Keyboard shortcut: Escape key allows concluding video early during presentations
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && hasStarted && !videoFinished) {
-        handleVideoEnded();
+      if (e.key === "Escape" && hasStarted && !videoFinishedRef.current) {
+        handleVideoEndedRef.current("escape_key", activeExecutionIdRef.current);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [hasStarted, videoFinished]);
+  }, [hasStarted]);
 
   // Dynamic audio and speech recognition lifecycle is managed on-demand via toggleListening
 
   // Play and reload helper triggered on video changes
   const activeVideoUrl = (() => {
+    if (activeVideoSlot === "full_video") {
+      return currentGroup.fullVideo?.videoUrl || "";
+    }
     if (activeVideoSlot === "intro") {
-      return effectiveIntroUrl;
+      return currentGroup.intro?.videoUrl || "";
     }
     const match = effectiveQuestions.find(q => q.id === activeVideoSlot);
     if (match) {
@@ -1331,186 +1198,49 @@ export default function App() {
     }
   }, [activeVideoSlot, activeVideoUrl]);
 
-  // Handle URL input for any trigger slot (YouTube, direct MP4, etc.)
-  const handleUrlChange = (slotId: string, url: string) => {
-    const trimmed = url.trim();
-    const isYt = isYouTubeUrl(trimmed);
-    const ytId = getYouTubeVideoId(trimmed);
-    const autoName = isYt ? `YouTube [${ytId}]` : (trimmed ? "Vídeo Web" : "");
-
-    if (slotId === "intro") {
-      setIntroUrl(trimmed);
-      if (trimmed) {
-        setIntroName(autoName || "Apresentação Inicial");
-      }
-      setActiveVideoSlot("intro");
-    } else {
-      setQuestions(prev => prev.map(q => {
-        if (q.id === slotId) {
-          return {
-            ...q,
-            videoUrl: trimmed,
-            videoName: trimmed ? (autoName || q.videoName || "Vídeo Configurado") : ""
-          };
-        }
-        return q;
-      }));
-      setActiveVideoSlot(slotId);
-    }
-  };
-
-  // Handle local video files selection
-  const handleFileChange = (slotId: string, file: File) => {
-    const url = URL.createObjectURL(file);
-    if (slotId === "intro") {
-      setIntroUrl(url);
-      setIntroName(file.name);
-      setActiveVideoSlot("intro");
-    } else {
-      setQuestions(prev => prev.map(q => {
-        if (q.id === slotId) {
-          return { ...q, videoUrl: url, videoName: file.name };
-        }
-        return q;
-      }));
-      setActiveVideoSlot(slotId);
-    }
-  };
-
-  // Add questions helper with default YouTube video
-  const addQuestion = () => {
-    const newId = `trigger_${Date.now()}`;
-    setQuestions(prev => [
-      ...prev,
-      {
-        id: newId,
-        phrase: `nova resposta ${prev.length + 1}`,
-        videoUrl: "https://www.youtube.com/watch?v=1La4QzGeaaQ",
-        videoName: "Vídeo YouTube"
-      }
-    ]);
-  };
-
-  // Remove question helper
-  const removeQuestion = (id: string) => {
-    setConfirmModal({
-      isOpen: true,
-      title: "Excluir Gatilho",
-      message: "Deseja mesmo excluir este gatilho de ativação por voz? Essa ação não pode ser desfeita.",
-      onConfirm: () => {
-        setQuestions(prev => prev.filter(q => q.id !== id));
-        if (activeVideoSlot === id) {
-          setActiveVideoSlot("intro");
-        }
-      }
-    });
-  };
-
-  const updateQuestionPhrase = (id: string, phrase: string) => {
-    setQuestions(prev => prev.map(q => {
-      if (q.id === id) {
-        return { ...q, phrase };
-      }
-      return q;
-    }));
-  };
-
   const getActiveVideoUrl = () => {
     return activeVideoUrl;
   };
 
   const getActiveVideoTitle = () => {
-    if (activeVideoSlot === "intro") return `APRESENTAÇÃO INICIAL: ${effectiveIntroName || "Vídeo"}`;
+    if (activeVideoSlot === "full_video") return `VÍDEO COMPLETO: ${currentGroup.fullVideo?.videoName || currentGroup.name}`;
+    if (activeVideoSlot === "intro") return `INTRODUÇÃO: ${effectiveIntroName || currentGroup.name}`;
     const match = effectiveQuestions.find(q => q.id === activeVideoSlot);
     if (match) {
-      return `PROJEÇÃO: ${match.phrase.toUpperCase()} (${match.videoName || "Vídeo"})`;
+      return `GATILHO: ${match.phrase.toUpperCase()}`;
     }
-    return "APRESENTAÇÃO INICIAL";
+    return currentGroup.name;
   };
-
-  const isIntroSpecialVideo = activeVideoSlot === "intro" && (
-    introName === "WhatsApp Video 2026-06-12 at 08.35.25.mp4" ||
-    introName === "WhatsApp Video 2026-06-12 at 08.35.25" ||
-    introName?.includes("WhatsApp Video 2026-06-12 at 08.35.25.mp4") ||
-    getActiveVideoTitle() === "APRESENTAÇÃO INICIAL: WhatsApp Video 2026-06-12 at 08.35.25.mp4"
-  );
-
-  const playableSlots = [
-    ...(effectiveIntroUrl ? ["intro"] : []),
-    ...effectiveQuestions.filter(q => q.videoUrl).map(q => q.id)
-  ];
-
-  const allVideosPlayed = playableSlots.length > 0 && playableSlots.every(slot => viewedSlots.includes(slot));
 
   const resetAllTriggers = () => {
     setConfirmModal({
       isOpen: true,
-      title: "Redefinir Tudo",
-      message: "Deseja restaurar todos os vídeos e frases de ativação para as URLs padrão do YouTube?",
+      title: "Reiniciar Preferências",
+      message: "Deseja restaurar o tema visual e as preferências do reprodutor para o padrão da plataforma?",
       onConfirm: () => {
-        setIntroUrl(DEFAULT_INTRO_URL);
-        setIntroName(DEFAULT_INTRO_NAME);
-        setQuestions(DEFAULT_QUESTIONS);
-        setActiveVideoSlot("intro");
+        setSelectedThemeId("amazonia");
+        setPreferredVideoQuality("hd1080");
+        setForce1080pOnly(true);
+        setVideoFit("contain");
+        setShowBgImage(true);
+        setBgOpacity(35);
         setLastSpeechDetected("");
         setRealtimeSpeech("");
-        safeStorage.removeItem("eco_custom_questions");
-        safeStorage.removeItem("eco_intro_url");
-        safeStorage.removeItem("eco_intro_name");
-        setAiResponseText("Ajustes redefinidos para os vídeos padrão da Assistente Virtual WIT.");
+        safeStorage.removeItem("natureza_selected_theme");
+        safeStorage.removeItem("wit_selected_theme");
+        setAiResponseText("Preferências restauradas para a configuração padrão ASSISTENTES DA NATUREZA.");
       }
     });
   };
 
-  // Main voice commander parser & matcher to trigger projection shifts
+  // Reconhecimento e acionamento exclusivo para as frases do grupo ativo selecionado
   const handleIncomingCommand = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
+    if (presentationEndedRef.current) return;
 
-    const lowerText = trimmed.toLowerCase();
-
-    // Hands-free voice commands requested by the user
-    if (
-      lowerText.includes("rever") || 
-      lowerText.includes("reassistir") || 
-      lowerText.includes("reproduzir novamente") || 
-      lowerText.includes("ver de novo") ||
-      lowerText.includes("rever video") ||
-      lowerText.includes("rever vídeo")
-    ) {
-      handleReplayVideo();
-      setAiResponseText("Vídeo reiniciado via comando de voz.");
-      setIsAnalyzing(false);
-      return;
-    }
-
-    if (
-      lowerText.includes("iniciar do zero") || 
-      lowerText.includes("iniciar do xzero") || 
-      lowerText.includes("reiniciar") || 
-      lowerText.includes("do zero") || 
-      lowerText.includes("do xzero") || 
-      lowerText.includes("iniciar do o0") || 
-      lowerText.includes("do o0") ||
-      lowerText.includes("começar do zero")
-    ) {
-      setViewedSlots([]);
-      setUsedTriggerIds([]);
-      try { safeStorage.removeItem("eco_used_trigger_ids"); } catch (_) {}
-      triggerVideoSlot("intro", "Visita reiniciada do zero. Todos os gatilhos foram reativados.");
-      setIsAnalyzing(false);
-      return;
-    }
-
-    if (
-      lowerText.includes("restaurar gatilhos") || 
-      lowerText.includes("reiniciar gatilhos") || 
-      lowerText.includes("reativar gatilhos") || 
-      lowerText.includes("zerar gatilhos") ||
-      lowerText.includes("limpar gatilhos")
-    ) {
-      restoreUsedTriggers();
-      setIsAnalyzing(false);
+    const activeGrp = currentGroupRef.current;
+    if (activeGrp.presentationType === "full_video" || activeGrp.triggers.length === 0) {
       return;
     }
 
@@ -1520,33 +1250,25 @@ export default function App() {
     setSpeechError("");
     setExperienceState("PROCESSANDO");
 
-    // 1. Identificação de gatilho contextual para o grupo e bioma ativo
-    const matchedSlotId = matchTriggerForGroup(trimmed, currentGroup.id);
-
-    if (matchedSlotId === "intro") {
-      triggerVideoSlot("intro", "Apresentação inicial sintonizada.");
-      setIsAnalyzing(false);
-      return;
-    } else if (matchedSlotId) {
-      const found = currentGroup.triggers.find(t => t.id === matchedSlotId);
+    // 1. Identificação contextual exclusiva para os 4 gatilhos do grupo ativo
+    const matchedSlotId = matchTriggerForActiveGroup(trimmed, activeGrp.id);
+    if (matchedSlotId) {
+      const found = activeGrp.triggers.find(t => t.id === matchedSlotId);
       if (found) {
-        triggerVideoSlot(matchedSlotId, `Transmitindo: "${found.phrase}"`);
+        triggerVideoSlot(found.id, `Reproduzindo: "${found.phrase}"`, activeGrp);
         setIsAnalyzing(false);
         return;
       }
     }
 
-    // 2. Fallback semântico para o servidor Gemini se a frase falada for uma variação mais elaborada
+    // 2. Fallback semântico restrito exclusivamente aos 4 gatilhos do grupo ativo
     try {
-      const virtualTriggers: Trigger[] = [
-        { id: "intro", phrase: currentGroup.intro.phrase, videoUrl: currentGroup.intro.videoUrl, description: currentGroup.intro.description },
-        ...currentGroup.triggers.map(t => ({
-          id: t.id,
-          phrase: t.phrase,
-          videoUrl: t.videoUrl,
-          description: t.description
-        }))
-      ];
+      const virtualTriggers: Trigger[] = activeGrp.triggers.map(t => ({
+        id: t.id,
+        phrase: t.phrase,
+        videoUrl: t.videoUrl,
+        description: t.description
+      }));
 
       const response = await fetch("/api/gemini/analyze", {
         method: "POST",
@@ -1560,14 +1282,10 @@ export default function App() {
       if (response.ok) {
         const result = await response.json();
         const matchedId = result.matchedTriggerId;
-        if (matchedId === "intro") {
-          triggerVideoSlot("intro", result.response || "Apresentação inicial sintonizada.");
-          setIsAnalyzing(false);
-          return;
-        } else if (matchedId) {
-          const found = currentGroup.triggers.find(t => t.id === matchedId);
+        if (matchedId) {
+          const found = activeGrp.triggers.find(t => t.id === matchedId);
           if (found) {
-            triggerVideoSlot(matchedId, result.response || `Transmitindo: "${found.phrase}"`);
+            triggerVideoSlot(found.id, result.response || `Reproduzindo: "${found.phrase}"`, activeGrp);
             setIsAnalyzing(false);
             return;
           }
@@ -1577,13 +1295,15 @@ export default function App() {
       console.warn("AI analysis fallback:", err);
     }
 
-    const availablePhrases = currentGroup.triggers.map(t => `"${t.phrase}"`).join(", ");
-    setAiResponseText(`Comando não identificado. Por favor, fale um dos gatilhos: ${availablePhrases}.`);
+    const availablePhrases = activeGrp.triggers.map(t => `"${t.phrase}"`).join(", ");
+    setAiResponseText(`Comando não identificado para ${activeGrp.name}. Fale ou selecione um dos gatilhos: ${availablePhrases}.`);
     setIsAnalyzing(false);
-    if (videoFinished) {
-      setExperienceState(micPermission === "granted" ? "ESCUTANDO" : "AGUARDANDO");
+    if (videoFinishedRef.current && !presentationEndedRef.current) {
+      setExperienceState(micPermissionRef.current === "granted" ? "ESCUTANDO" : "AGUARDANDO");
     }
   };
+
+  handleIncomingCommandRef.current = handleIncomingCommand;
 
   // Request microphone permission explicitly (triggers browser dialog on mobile iOS/Android)
   const requestMicrophonePermission = async (): Promise<boolean> => {
@@ -1798,7 +1518,7 @@ export default function App() {
                 const text = data.transcript.trim();
                 setLastSpeechDetected(text);
                 setRealtimeSpeech("");
-                handleIncomingCommand(text);
+                handleIncomingCommandRef.current(text);
               } else {
                 setSpeechError("Nenhuma fala detectada no áudio gravado. Tente falar mais próximo ao celular.");
               }
@@ -1886,7 +1606,7 @@ export default function App() {
           setLastSpeechDetected(finalTranscript);
           setRealtimeSpeech("");
           setIsListening(false);
-          handleIncomingCommand(finalTranscript);
+          handleIncomingCommandRef.current(finalTranscript);
         }
       };
 
@@ -1921,10 +1641,11 @@ export default function App() {
     }
   };
 
-  // Inicia reconhecimento de voz somente se o usuário tiver concedido permissão ao microfone
+  // Inicia reconhecimento de voz somente se o usuário concedeu permissão e não encerrou com Tchau
   const startListeningIfAllowed = () => {
-    if (micPermission !== "granted") return;
-    if (isListening || isRecordingMedia) return;
+    if (presentationEndedRef.current) return;
+    if (micPermissionRef.current !== "granted") return;
+    if (isListeningRef.current || isRecordingMediaRef.current) return;
     const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (isMobile || preferredSpeechEngine === "gemini" || !SpeechRecognitionClass) {
       startMediaRecording();
@@ -2047,11 +1768,11 @@ export default function App() {
         }
       `}</style>
 
-      {/* Top Application Bar */}
-      {!hidePanels && !isFullscreen && (
+      {/* Top Application Bar (Exibido após entrar na plataforma) */}
+      {hasEnteredApp && !hidePanels && !isFullscreen && (
         <header 
           id="wit-nav" 
-          className="backdrop-blur-md border-b py-3.5 px-3 sm:px-6 sticky top-0 z-20 transition-colors duration-300"
+          className="backdrop-blur-md border-b py-3 px-3 sm:px-6 sticky top-0 z-20 transition-colors duration-300"
           style={{
             backgroundColor: currentTheme.colors.bgSurface,
             borderColor: currentTheme.colors.borderSubtle
@@ -2059,92 +1780,106 @@ export default function App() {
         >
           <div className="max-w-7xl mx-auto flex flex-wrap md:flex-nowrap items-center justify-between gap-3">
             
-            {/* Left side: Brand title and status */}
+            {/* Left side: Exclusive AppLogo, Brand title and status */}
             <div className="flex items-center gap-2.5 sm:gap-3.5 select-none shrink-0">
-              {/* WIT Brand Logo (Theme colored Pill Badge) */}
-              <div 
-                className="font-mono font-black text-xs sm:text-sm px-2.5 py-1 rounded-md shadow-sm tracking-widest border transition-colors duration-300"
-                style={{
-                  backgroundColor: currentTheme.colors.primary,
-                  color: currentTheme.colors.primaryText,
-                  borderColor: currentTheme.colors.borderMain
+              <button
+                type="button"
+                onClick={() => {
+                  suspendSpeechRecognition();
+                  setHasEnteredApp(false);
+                  setHasSelectedGroup(false);
+                  setHasStarted(false);
+                  setVideoFinished(false);
+                  setPresentationEnded(false);
+                  setActiveTab("chat");
                 }}
+                className="flex items-center gap-2.5 cursor-pointer group text-left"
+                title="Voltar à Tela Inicial"
               >
-                WIT
-              </div>
-              <div className="flex flex-col">
-                <span 
-                  className="font-display font-black text-base sm:text-xl tracking-wider uppercase leading-none whitespace-nowrap transition-colors duration-300"
-                  style={{ color: currentTheme.colors.textPrimary }}
-                >
-                  ASSISTENTE VIRTUAL
-                </span>
-                <div className="flex items-center gap-1.5 mt-1">
+                <AppLogo size="sm" className="group-hover:scale-105 transition-transform" />
+                <div className="flex flex-col">
                   <span 
-                    className="w-1.5 h-1.5 rounded-full animate-pulse" 
-                    style={{ backgroundColor: currentTheme.colors.primary }}
-                  />
-                  <span 
-                    className="text-[9px] font-mono uppercase tracking-widest leading-none whitespace-nowrap"
-                    style={{ color: currentTheme.colors.textMuted }}
+                    className="font-display font-black text-sm sm:text-lg tracking-wider uppercase leading-none whitespace-nowrap transition-colors duration-300"
+                    style={{ color: currentTheme.colors.textPrimary }}
                   >
-                    Live • 1080p HD
+                    ASSISTENTES DA NATUREZA
                   </span>
-                  {/* Experience State Indicator Badge */}
-                  <div 
-                    className="text-[8px] font-mono font-bold px-2 py-0.5 rounded border uppercase flex items-center gap-1.5 transition-all whitespace-nowrap leading-none shrink-0"
-                    style={{
-                      backgroundColor: currentTheme.colors.bgCard,
-                      borderColor: currentTheme.colors.borderSubtle,
-                      color: experienceState === "ESCUTANDO" ? "#f87171" : experienceState === "PROCESSANDO" ? "#fbbf24" : experienceState === "REPRODUZINDO" ? "#34d399" : experienceState === "INTRODUCAO" ? "#60a5fa" : currentTheme.colors.textSecondary
-                    }}
-                    title={`Estado atual da experiência interativa: ${experienceState}`}
-                  >
-                    <span className={`w-1.5 h-1.5 rounded-full ${
-                      experienceState === "ESCUTANDO" ? "bg-red-500 animate-ping" : 
-                      experienceState === "PROCESSANDO" ? "bg-amber-400 animate-spin" : 
-                      experienceState === "REPRODUZINDO" ? "bg-emerald-400 animate-pulse" : 
-                      experienceState === "INTRODUCAO" ? "bg-blue-400 animate-pulse" : 
-                      "bg-zinc-400"
-                    }`} />
-                    <span>{experienceState}</span>
-                  </div>
-                  {/* Theme Badge in Header with Quick Ecosystem Modal Trigger */}
-                  <button 
-                    type="button"
-                    onClick={() => setShowEcosystemModal(true)}
-                    className="text-[8px] font-mono font-bold px-2 py-0.5 rounded border uppercase flex items-center gap-1.5 transition-all duration-300 cursor-pointer hover:scale-105 active:scale-95"
-                    style={{
-                      backgroundColor: currentTheme.colors.bgCard,
-                      color: currentTheme.colors.primary,
-                      borderColor: currentTheme.colors.borderMain,
-                      boxShadow: `0 0 10px ${currentTheme.glowColor}`
-                    }}
-                    title={`Clique para ver os Dispositivos IoT e Fauna de ${currentTheme.name}`}
-                  >
-                    {renderThemeIcon(currentTheme.iconName, "w-2.5 h-2.5")}
-                    <span>{currentTheme.name}</span>
-                    <span className="hidden sm:inline opacity-80">• {currentTheme.environmentTitle}</span>
-                  </button>
-                  {showBgImage && (
+                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                     <span 
-                      className="hidden sm:inline text-[8px] font-mono font-bold px-1.5 py-0.2 rounded-full whitespace-nowrap leading-none border"
+                      className="text-[9px] font-mono font-black uppercase tracking-widest leading-none whitespace-nowrap"
+                      style={{ color: currentTheme.colors.primary }}
+                    >
+                      9º A – OSMARINHO
+                    </span>
+                    <span className="text-[9px] opacity-40">•</span>
+                    {/* Experience State Indicator Badge */}
+                    <div 
+                      className="text-[8px] font-mono font-bold px-2 py-0.5 rounded border uppercase flex items-center gap-1.5 transition-all whitespace-nowrap leading-none shrink-0"
                       style={{
                         backgroundColor: currentTheme.colors.bgCard,
-                        color: currentTheme.colors.textSecondary,
-                        borderColor: currentTheme.colors.borderSubtle
+                        borderColor: currentTheme.colors.borderSubtle,
+                        color: experienceState === "ESCUTANDO" ? "#f87171" : experienceState === "PROCESSANDO" ? "#fbbf24" : experienceState === "REPRODUZINDO" ? "#34d399" : experienceState === "INTRODUCAO" ? "#60a5fa" : currentTheme.colors.textSecondary
                       }}
+                      title={`Estado atual: ${experienceState}`}
                     >
-                      Fundo {bgOpacity}%
-                    </span>
-                  )}
+                      <span className={`w-1.5 h-1.5 rounded-full ${
+                        experienceState === "ESCUTANDO" ? "bg-red-500 animate-ping" : 
+                        experienceState === "PROCESSANDO" ? "bg-amber-400 animate-spin" : 
+                        experienceState === "REPRODUZINDO" ? "bg-emerald-400 animate-pulse" : 
+                        experienceState === "INTRODUCAO" ? "bg-blue-400 animate-pulse" : 
+                        "bg-zinc-400"
+                      }`} />
+                      <span>{experienceState}</span>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              </button>
+
+              {/* Theme Badge in Header with Quick Ecosystem Modal Trigger */}
+              <button 
+                type="button"
+                onClick={() => setShowEcosystemModal(true)}
+                className="hidden sm:flex text-[8px] font-mono font-bold px-2.5 py-1 rounded-lg border uppercase items-center gap-1.5 transition-all duration-300 cursor-pointer hover:scale-105 active:scale-95"
+                style={{
+                  backgroundColor: currentTheme.colors.bgCard,
+                  color: currentTheme.colors.primary,
+                  borderColor: currentTheme.colors.borderMain,
+                  boxShadow: `0 0 10px ${currentTheme.glowColor}`
+                }}
+                title={`Ver Dispositivos IoT e Fauna de ${currentTheme.name}`}
+              >
+                {renderThemeIcon(currentTheme.iconName, "w-3 h-3")}
+                <span>{currentTheme.name}</span>
+              </button>
             </div>
 
-            {/* Right Action buttons: Fundo, Salvar Dados, Voz, Ajustes */}
+            {/* Right Action buttons */}
             <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 flex-nowrap overflow-x-auto no-scrollbar py-0.5">
               
+              {/* Return to Start Screen */}
+              <button
+                type="button"
+                onClick={() => {
+                  suspendSpeechRecognition();
+                  setHasEnteredApp(false);
+                  setHasSelectedGroup(false);
+                  setHasStarted(false);
+                  setVideoFinished(false);
+                  setPresentationEnded(false);
+                  setActiveTab("chat");
+                }}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[9px] font-mono font-bold uppercase transition-all duration-200 border cursor-pointer whitespace-nowrap leading-none shrink-0"
+                style={{
+                  backgroundColor: currentTheme.colors.bgCard,
+                  color: currentTheme.colors.textSecondary,
+                  borderColor: currentTheme.colors.borderSubtle
+                }}
+                title="Voltar para a Tela Inicial"
+              >
+                <Home className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden lg:inline">Início</span>
+              </button>
+
               {/* Quick Background Toggle */}
               <button
                 type="button"
@@ -2161,7 +1896,7 @@ export default function App() {
                 <span className="hidden md:inline whitespace-nowrap">{showBgImage ? `Fundo ${bgOpacity}%` : "Fundo OFF"}</span>
               </button>
 
-              {/* Salvar Todos os Dados do App */}
+              {/* Salvar Preferências */}
               <button
                 type="button"
                 onClick={handleSaveAllData}
@@ -2171,13 +1906,29 @@ export default function App() {
                   color: currentTheme.colors.textPrimary,
                   borderColor: currentTheme.colors.borderSubtle
                 }}
-                title="Salvar todos os dados do app agora"
+                title="Salvar preferências"
               >
                 <Save className="w-3.5 h-3.5 shrink-0" />
-                <span className="hidden sm:inline whitespace-nowrap">Salvar Dados</span>
+                <span className="hidden sm:inline whitespace-nowrap">Salvar</span>
               </button>
 
-              {activeTab === "chat" && (
+              {/* Quiz dos Ecossistemas (Acesso Geral no Cabeçalho) */}
+              <button
+                type="button"
+                onClick={() => openEcosystemQuiz(selectedThemeId)}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[9px] font-mono font-bold uppercase transition-all duration-200 border cursor-pointer whitespace-nowrap leading-none shrink-0"
+                style={{
+                  backgroundColor: currentTheme.colors.bgCard,
+                  color: currentTheme.colors.accent,
+                  borderColor: currentTheme.colors.borderMain
+                }}
+                title="Abrir Quizzes Interativos dos Ecossistemas"
+              >
+                <Trophy className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden sm:inline whitespace-nowrap">Quizzes</span>
+              </button>
+
+              {activeTab === "chat" && hasSelectedGroup && !presentationEnded && !isFullVideoGroup && (
                 <button
                   type="button"
                   onClick={toggleListening}
@@ -2216,7 +1967,7 @@ export default function App() {
                   color: activeTab === "settings" ? currentTheme.colors.primaryText : currentTheme.colors.textSecondary,
                   borderColor: activeTab === "settings" ? currentTheme.colors.borderMain : currentTheme.colors.borderSubtle
                 }}
-                title={activeTab === "chat" ? "Ir para Configurações" : "Ir para o Player"}
+                title={activeTab === "chat" ? "Ir para Configurações" : "Ir para Apresentação"}
               >
                 {activeTab === "chat" ? (
                   <>
@@ -2226,7 +1977,7 @@ export default function App() {
                 ) : (
                   <>
                     <Tv className="w-3.5 h-3.5 shrink-0" />
-                    <span className="hidden sm:inline whitespace-nowrap">Player</span>
+                    <span className="hidden sm:inline whitespace-nowrap">Apresentação</span>
                   </>
                 )}
               </button>
@@ -2239,8 +1990,362 @@ export default function App() {
       {/* Main Area */}
       <main className={`flex-1 w-full max-w-7xl mx-auto ${isFullscreen ? "p-0 sm:p-2 max-w-none" : "px-2 sm:px-6 py-3 sm:py-8"} flex flex-col justify-start transition-all duration-300 relative z-10`}>
         
-        {/* VIEW 1: CHAT & PROJECTION (Simplified, dedicated single panel for interaction) */}
-        {activeTab === "chat" && (
+        {/* VIEW 0: TELA INICIAL OFICIAL (ASSISTENTES DA NATUREZA | 9º A – OSMARINHO) */}
+        {!hasEnteredApp && activeTab === "chat" && (
+          <div className="flex-1 flex flex-col items-center justify-center py-6 sm:py-10 animate-fade-in">
+            <div 
+              className="w-full max-w-4xl rounded-3xl border-2 p-6 sm:p-10 backdrop-blur-xl shadow-2xl flex flex-col items-center text-center gap-6 relative overflow-hidden"
+              style={{
+                backgroundColor: currentTheme.colors.bgSurface,
+                borderColor: currentTheme.colors.borderMain,
+                boxShadow: `0 0 50px ${currentTheme.glowColor}, 0 20px 60px rgba(0,0,0,0.85)`
+              }}
+            >
+              {/* Subtle futuristic grid aura */}
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.08)_0%,transparent_60%)] pointer-events-none" />
+
+              {/* Exclusive Transparent Nature-Tech Logo */}
+              <div className="relative z-10 flex flex-col items-center gap-4">
+                <AppLogo size="xl" />
+
+                <div className="space-y-2">
+                  <span 
+                    className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full text-[10px] sm:text-xs font-mono font-black uppercase tracking-widest border"
+                    style={{
+                      backgroundColor: currentTheme.colors.bgCard,
+                      color: currentTheme.colors.primary,
+                      borderColor: currentTheme.colors.borderMain
+                    }}
+                  >
+                    <Cpu className="w-3.5 h-3.5" />
+                    <span>9º A – OSMARINHO</span>
+                  </span>
+
+                  <h1 
+                    className="font-display font-black text-2xl sm:text-4xl md:text-5xl uppercase tracking-wider leading-tight"
+                    style={{ color: currentTheme.colors.textPrimary }}
+                  >
+                    ASSISTENTES DA NATUREZA
+                  </h1>
+
+                  <p 
+                    className="text-xs sm:text-sm font-mono max-w-2xl mx-auto leading-relaxed"
+                    style={{ color: currentTheme.colors.textSecondary }}
+                  >
+                    Plataforma interativa de projetos em Ambientes Inteligentes, Internet das Coisas (IoT), Inteligência Artificial e Monitoramento Ambiental.
+                  </p>
+                </div>
+              </div>
+
+              {/* Representação Sutil dos 5 Temas Oficiais do Aplicativo */}
+              <div className="relative z-10 w-full space-y-2.5">
+                <div className="text-[10px] font-mono font-bold uppercase tracking-widest" style={{ color: currentTheme.colors.textMuted }}>
+                  5 Biomas Inteligentes (Selecione a Aparência Visual)
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 w-full">
+                  {THEME_LIST.map((th) => {
+                    const isSelected = selectedThemeId === th.id;
+                    return (
+                      <button
+                        key={th.id}
+                        type="button"
+                        onClick={() => handleSelectTheme(th.id)}
+                        className={`group rounded-2xl border p-2.5 text-left transition-all cursor-pointer flex flex-col gap-2 ${
+                          isSelected ? "scale-[1.03] ring-2 shadow-lg" : "opacity-85 hover:opacity-100 hover:scale-[1.01]"
+                        }`}
+                        style={{
+                          backgroundColor: isSelected ? th.colors.bgElevated : th.colors.bgCard,
+                          borderColor: isSelected ? th.colors.borderMain : th.colors.borderSubtle,
+                          boxShadow: isSelected ? `0 0 18px ${th.glowColor}` : "none",
+                          // @ts-ignore
+                          "--tw-ring-color": th.colors.primary
+                        }}
+                      >
+                        <div className="relative h-14 w-full rounded-xl overflow-hidden border" style={{ borderColor: th.colors.borderSubtle }}>
+                          <img src={th.bgImage} alt={th.name} className="w-full h-full object-cover" />
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/25 to-transparent" />
+                          <div 
+                            className="absolute bottom-1.5 left-1.5 w-5 h-5 rounded-md flex items-center justify-center"
+                            style={{ backgroundColor: th.colors.primary, color: th.colors.primaryText }}
+                          >
+                            {renderThemeIcon(th.iconName, "w-3 h-3")}
+                          </div>
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-display font-black text-xs uppercase truncate" style={{ color: th.colors.textPrimary }}>
+                            {th.name}
+                          </div>
+                          <div className="text-[8.5px] font-mono leading-tight line-clamp-2 mt-0.5" style={{ color: th.colors.textMuted }}>
+                            {th.shortCaracteristica}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Botão Principal INICIAR APRESENTAÇÃO e Acesso Geral aos Quizzes */}
+              <div className="relative z-10 flex flex-col items-center gap-3 pt-2">
+                <div className="flex flex-wrap items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHasEnteredApp(true);
+                      setHasSelectedGroup(false);
+                      setHasStarted(false);
+                      setVideoFinished(false);
+                      setPresentationEnded(false);
+                      setExperienceState("AGUARDANDO");
+                    }}
+                    className="px-8 sm:px-12 py-4 sm:py-4.5 font-display font-black text-sm sm:text-base uppercase tracking-wider rounded-2xl border-2 transition-all cursor-pointer flex items-center gap-3 group hover:scale-105 active:scale-95 shadow-xl whitespace-nowrap"
+                    style={{
+                      backgroundColor: currentTheme.colors.primary,
+                      color: currentTheme.colors.primaryText,
+                      borderColor: currentTheme.colors.borderMain,
+                      boxShadow: `0 0 28px ${currentTheme.glowColor}`
+                    }}
+                  >
+                    <Play className="w-5 h-5 fill-current group-hover:scale-110 transition-transform shrink-0" />
+                    <span>INICIAR APRESENTAÇÃO</span>
+                    <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform shrink-0" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => openEcosystemQuiz(selectedThemeId)}
+                    className="px-6 py-4 font-display font-black text-xs sm:text-sm uppercase tracking-wider rounded-2xl border-2 transition-all cursor-pointer flex items-center gap-2.5 hover:scale-105 active:scale-95 shadow-lg whitespace-nowrap"
+                    style={{
+                      backgroundColor: currentTheme.colors.bgCard,
+                      color: currentTheme.colors.accent,
+                      borderColor: currentTheme.colors.borderMain
+                    }}
+                  >
+                    <Trophy className="w-4 h-4 shrink-0" />
+                    <span>QUIZ DOS ECOSSISTEMAS</span>
+                  </button>
+                </div>
+                <span className="text-[10px] font-mono" style={{ color: currentTheme.colors.textMuted }}>
+                  5 Grupos de Apresentação • Gatilhos Interativos, Vídeo Completo e 5 Quizzes de Biomas
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW 1A: SELEÇÃO DO GRUPO DE APRESENTAÇÃO (Após clicar em INICIAR APRESENTAÇÃO) */}
+        {hasEnteredApp && !hasSelectedGroup && activeTab === "chat" && (
+          <div className="space-y-6 animate-fade-in max-w-5xl mx-auto w-full py-2">
+            {/* Seletor de Aparência Visual dos 5 Temas */}
+            <div 
+              className="rounded-2xl p-3 sm:p-4 border-2 backdrop-blur-md flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg"
+              style={{
+                backgroundColor: currentTheme.colors.bgSurface,
+                borderColor: currentTheme.colors.borderSubtle,
+                boxShadow: `0 0 20px ${currentTheme.glowColor}`
+              }}
+            >
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider" style={{ color: currentTheme.colors.textMuted }}>
+                  Aparência Visual:
+                </span>
+                {THEME_LIST.map((th) => {
+                  const isSelected = selectedThemeId === th.id;
+                  return (
+                    <button
+                      key={th.id}
+                      type="button"
+                      onClick={() => handleSelectTheme(th.id)}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold uppercase border transition-all cursor-pointer flex items-center gap-1.5 ${
+                        isSelected ? "scale-105 shadow-md" : "opacity-75 hover:opacity-100"
+                      }`}
+                      style={{
+                        backgroundColor: isSelected ? th.colors.primary : th.colors.bgCard,
+                        color: isSelected ? th.colors.primaryText : th.colors.textPrimary,
+                        borderColor: isSelected ? th.colors.borderMain : th.colors.borderSubtle
+                      }}
+                    >
+                      {renderThemeIcon(th.iconName, "w-3 h-3")}
+                      <span>{th.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={() => setHasEnteredApp(false)}
+                className="text-[10px] font-mono font-bold uppercase px-3 py-1.5 rounded-lg border flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
+                style={{
+                  backgroundColor: currentTheme.colors.bgCard,
+                  color: currentTheme.colors.textSecondary,
+                  borderColor: currentTheme.colors.borderSubtle
+                }}
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Tela Inicial</span>
+              </button>
+            </div>
+
+            {/* Cards dos 5 Grupos Oficiais */}
+            <div 
+              className="rounded-3xl p-6 sm:p-8 border-2 backdrop-blur-md space-y-6 shadow-2xl"
+              style={{
+                backgroundColor: currentTheme.colors.bgSurface,
+                borderColor: currentTheme.colors.borderMain,
+                boxShadow: `0 0 30px ${currentTheme.glowColor}`
+              }}
+            >
+              <div className="text-center space-y-2">
+                <div 
+                  className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-mono font-black uppercase border"
+                  style={{
+                    backgroundColor: currentTheme.colors.bgCard,
+                    color: currentTheme.colors.primary,
+                    borderColor: currentTheme.colors.borderMain
+                  }}
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>5 Grupos Oficiais • 9º A – Osmarinho</span>
+                </div>
+                <h2 className="font-display font-black text-xl sm:text-3xl uppercase tracking-wider" style={{ color: currentTheme.colors.textPrimary }}>
+                  Escolha o Grupo de Apresentação
+                </h2>
+                <p className="text-xs sm:text-sm font-mono max-w-2xl mx-auto" style={{ color: currentTheme.colors.textSecondary }}>
+                  Selecione qualquer um dos 5 grupos para iniciar a apresentação com vídeo introdutório e gatilhos interativos ou vídeo completo com Quiz da Caatinga.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {ALL_GROUPS_LIST.map((grp, idx) => {
+                  const isFullVideo = grp.presentationType === "full_video";
+                  return (
+                    <button
+                      key={grp.id}
+                      type="button"
+                      onClick={() => handleSelectGroup(grp.id, true)}
+                      className="group text-left rounded-2xl border-2 p-5 transition-all cursor-pointer flex flex-col justify-between gap-4 hover:scale-[1.02] active:scale-[0.99] shadow-lg"
+                      style={{
+                        backgroundColor: currentTheme.colors.bgCard,
+                        borderColor: currentTheme.colors.borderSubtle,
+                        boxShadow: `0 6px 24px rgba(0,0,0,0.45)`
+                      }}
+                    >
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <span 
+                            className="text-[9px] font-mono font-black uppercase px-2.5 py-0.5 rounded-full border"
+                            style={{
+                              backgroundColor: currentTheme.colors.bgElevated,
+                              color: currentTheme.colors.primary,
+                              borderColor: currentTheme.colors.borderMain
+                            }}
+                          >
+                            Grupo {idx + 1} • {grp.temaReferenciaNome}
+                          </span>
+                          <span className="text-[9px] font-mono" style={{ color: currentTheme.colors.textMuted }}>
+                            {isFullVideo ? "Vídeo Completo" : `Intro + ${grp.triggers.length} Gatilhos`}
+                          </span>
+                        </div>
+
+                        <h3 className="font-display font-black text-base sm:text-lg uppercase tracking-wide leading-snug" style={{ color: currentTheme.colors.textPrimary }}>
+                          {grp.name}
+                        </h3>
+
+                        <p className="text-[11px] font-mono leading-relaxed" style={{ color: currentTheme.colors.textMuted }}>
+                          {grp.description}
+                        </p>
+
+                        <div className="space-y-1 pt-2 border-t" style={{ borderColor: currentTheme.colors.borderSubtle }}>
+                          {isFullVideo ? (
+                            <>
+                              <span className="text-[9px] font-mono uppercase font-bold block" style={{ color: currentTheme.colors.textMuted }}>
+                                Formato da Apresentação:
+                              </span>
+                              <p className="text-[10px] font-mono leading-relaxed" style={{ color: currentTheme.colors.textSecondary }}>
+                                Reprodução contínua em vídeo único. Ao final: Assistir Novamente ou Fazer Quiz da Caatinga.
+                              </p>
+                            </>
+                          ) : (
+                            <>
+                              <span className="text-[9px] font-mono uppercase font-bold block" style={{ color: currentTheme.colors.textMuted }}>
+                                Gatilhos de Interação ({grp.triggers.length}):
+                              </span>
+                              <ul className="space-y-1">
+                                {grp.triggers.map((tr, tIdx) => (
+                                  <li key={tr.id} className="text-[10px] font-mono truncate flex items-center gap-1.5" style={{ color: currentTheme.colors.textSecondary }}>
+                                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: currentTheme.colors.primary }} />
+                                    <span className="truncate">{tIdx + 1}. {tr.phrase}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      <div 
+                        className="w-full py-2.5 px-4 rounded-xl font-display font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 border transition-all group-hover:brightness-110"
+                        style={{
+                          backgroundColor: currentTheme.colors.primary,
+                          color: currentTheme.colors.primaryText,
+                          borderColor: currentTheme.colors.borderMain
+                        }}
+                      >
+                        <Play className="w-4 h-4 fill-current" />
+                        <span>Iniciar Grupo {idx + 1}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Barra de Acesso Geral aos 5 Quizzes dos Ecossistemas */}
+              <div
+                className="rounded-2xl p-4 sm:p-5 border flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                style={{
+                  backgroundColor: currentTheme.colors.bgCard,
+                  borderColor: currentTheme.colors.borderSubtle
+                }}
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 font-display font-black text-sm uppercase" style={{ color: currentTheme.colors.textPrimary }}>
+                    <Trophy className="w-4 h-4 shrink-0" style={{ color: currentTheme.colors.accent }} />
+                    <span>Quizzes Interativos dos 5 Ecossistemas</span>
+                  </div>
+                  <p className="text-[11px] font-mono" style={{ color: currentTheme.colors.textMuted }}>
+                    Teste seus conhecimentos sobre cada bioma (5 perguntas • até 5.000 pontos).
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  {ALL_QUIZZES_LIST.map((qz) => {
+                    const th = THEMES[qz.themeId];
+                    const isDefault = qz.themeId === selectedThemeId;
+                    return (
+                      <button
+                        key={qz.id}
+                        type="button"
+                        onClick={() => openEcosystemQuiz(qz.themeId)}
+                        className="min-h-[40px] px-3 py-2 rounded-xl font-mono text-[10px] font-black uppercase border flex items-center gap-1.5 cursor-pointer transition-all hover:scale-105 whitespace-nowrap"
+                        style={{
+                          backgroundColor: isDefault ? th.colors.primary : currentTheme.colors.bgSurface,
+                          color: isDefault ? th.colors.primaryText : th.colors.textPrimary,
+                          borderColor: isDefault ? th.colors.borderMain : currentTheme.colors.borderSubtle
+                        }}
+                      >
+                        {renderThemeIcon(th.iconName, "w-3.5 h-3.5 shrink-0")}
+                        <span>Quiz {qz.ecosystemName}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW 1B: PLAYER & INTERAÇÃO DO GRUPO SELECIONADO */}
+        {hasEnteredApp && hasSelectedGroup && activeTab === "chat" && (
           <div className="space-y-6 animate-fade-in max-w-7xl mx-auto w-full transition-all duration-300">
             
             <div className="max-w-5xl mx-auto w-full flex flex-col gap-6">
@@ -2255,11 +2360,11 @@ export default function App() {
                     boxShadow: `0 0 20px ${currentTheme.glowColor}`
                   }}
                 >
-                  {/* Line 1: Biomes Switcher */}
+                  {/* Line 1: Biomes Switcher (5 Official Themes - visual appearance only) */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="text-[10px] font-mono font-bold uppercase tracking-wider" style={{ color: currentTheme.colors.textMuted }}>
-                        Bioma:
+                        Tema Visual:
                       </span>
                       {THEME_LIST.map((th) => {
                         const isSelected = selectedThemeId === th.id;
@@ -2286,62 +2391,87 @@ export default function App() {
                     </div>
 
                     <div className="flex items-center gap-1.5">
-                      <span 
-                        className="text-[9px] font-mono font-bold px-2 py-0.5 rounded border uppercase flex items-center gap-1"
+                      <button
+                        type="button"
+                        onClick={() => {
+                          suspendSpeechRecognition();
+                          setHasSelectedGroup(false);
+                          setHasStarted(false);
+                          setVideoFinished(false);
+                          setPresentationEnded(false);
+                          setExperienceState("AGUARDANDO");
+                        }}
+                        className="text-[9px] font-mono font-bold px-2.5 py-1 rounded border uppercase flex items-center gap-1.5 cursor-pointer hover:brightness-110"
                         style={{
                           backgroundColor: currentTheme.colors.bgCard,
                           color: currentTheme.colors.primary,
                           borderColor: currentTheme.colors.borderMain
                         }}
                       >
-                        <Sparkles className="w-2.5 h-2.5" />
-                        <span>Bioma {currentTheme.name} Ativo</span>
-                      </span>
+                        <ArrowLeft className="w-3 h-3" />
+                        <span>Trocar Grupo</span>
+                      </button>
                     </div>
                   </div>
 
-                  {/* Line 2: TAIGA Presentation Groups (DAVI, SAMARA, MILENA E JOÃO vs GRUPO GERAL) */}
-                  {isTaiga && (
-                    <div 
-                      className="pt-2.5 border-t flex flex-col sm:flex-row sm:items-center justify-between gap-2"
-                      style={{ borderColor: currentTheme.colors.borderSubtle }}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-mono font-bold uppercase text-cyan-300 flex items-center gap-1">
-                          <Users className="w-3.5 h-3.5 text-cyan-400" />
-                          Grupo de Apresentação (Taiga):
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {TAIGA_PRESENTATION_GROUPS.map((grp) => {
-                          const isGroupActive = currentGroup.id === grp.id;
-                          return (
-                            <button
-                              key={grp.id}
-                              type="button"
-                              onClick={() => handleSelectGroup(grp.id)}
-                              className={`px-3 py-1.5 rounded-xl font-mono text-[10px] font-black uppercase border transition-all cursor-pointer flex items-center gap-2 ${
-                                isGroupActive 
-                                  ? "scale-105 shadow-md ring-1 ring-cyan-300" 
-                                  : "opacity-75 hover:opacity-100 hover:bg-cyan-950/40"
-                              }`}
-                              style={{
-                                backgroundColor: isGroupActive ? currentTheme.colors.primary : currentTheme.colors.bgCard,
-                                color: isGroupActive ? currentTheme.colors.primaryText : currentTheme.colors.textPrimary,
-                                borderColor: isGroupActive ? currentTheme.colors.borderMain : currentTheme.colors.borderSubtle,
-                                boxShadow: isGroupActive ? `0 0 14px ${currentTheme.glowColor}` : "none"
-                              }}
-                            >
-                              <span className={`w-2 h-2 rounded-full ${isGroupActive ? "bg-black animate-pulse" : "bg-cyan-400"}`} />
-                              <span>{grp.name}</span>
-                              <span className="text-[8px] opacity-80">({grp.triggers.length + 1} Vídeos)</span>
-                            </button>
-                          );
-                        })}
-                      </div>
+                  {/* Line 2: Universal Presentation Groups (Strictly the 3 Official Groups) */}
+                  <div 
+                    className="pt-2.5 border-t flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                    style={{ borderColor: currentTheme.colors.borderSubtle }}
+                  >
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span 
+                        className="text-[10px] font-mono font-bold uppercase flex items-center gap-1.5"
+                        style={{ color: currentTheme.colors.primary }}
+                      >
+                        <Users className="w-3.5 h-3.5" style={{ color: currentTheme.colors.primary }} />
+                        <span>Grupo Ativo:</span>
+                      </span>
+                      <span 
+                        className="text-[9px] font-mono px-2 py-0.5 rounded border"
+                        style={{
+                          backgroundColor: currentTheme.colors.bgCard,
+                          color: currentTheme.colors.textMuted,
+                          borderColor: currentTheme.colors.borderSubtle
+                        }}
+                      >
+                        Integrantes: <strong style={{ color: currentTheme.colors.textPrimary }}>{currentGroup.integrantes.join(", ")}</strong>
+                      </span>
                     </div>
-                  )}
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {ALL_GROUPS_LIST.map((grp) => {
+                        const isGroupActive = currentGroup.id === grp.id;
+                        return (
+                          <button
+                            key={grp.id}
+                            type="button"
+                            onClick={() => handleSelectGroup(grp.id, true)}
+                            className={`px-3 py-1.5 rounded-xl font-mono text-[10px] font-black uppercase border transition-all cursor-pointer flex items-center gap-2 ${
+                              isGroupActive 
+                                ? "scale-105 shadow-md ring-2" 
+                                : "opacity-80 hover:opacity-100 hover:scale-[1.02]"
+                            }`}
+                            style={{
+                              backgroundColor: isGroupActive ? currentTheme.colors.primary : currentTheme.colors.bgCard,
+                              color: isGroupActive ? currentTheme.colors.primaryText : currentTheme.colors.textPrimary,
+                              borderColor: isGroupActive ? currentTheme.colors.borderMain : currentTheme.colors.borderSubtle,
+                              boxShadow: isGroupActive ? `0 0 16px ${currentTheme.glowColor}` : "none",
+                              // @ts-ignore
+                              "--tw-ring-color": currentTheme.colors.primary
+                            }}
+                            title={`Apresentação: ${grp.name}`}
+                          >
+                            <span 
+                              className="w-2 h-2 rounded-full" 
+                              style={{ backgroundColor: isGroupActive ? currentTheme.colors.primaryText : currentTheme.colors.accent }}
+                            />
+                            <span>{grp.name}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -2452,7 +2582,13 @@ export default function App() {
                     {isFullscreen && videoFinished && (
                       <div className="absolute top-2.5 left-2.5 z-30 flex items-center gap-2 bg-black/75 backdrop-blur-md px-3 py-1.5 rounded-xl border border-zinc-800 text-[10px] font-mono text-zinc-300 shadow-md whitespace-nowrap leading-none">
                         <span className="w-2 h-2 rounded-full bg-white animate-pulse shrink-0" />
-                        <span className="font-bold text-white uppercase whitespace-nowrap leading-none">{activeVideoSlot === "intro" ? "Apresentação (Intro)" : `Canal ${effectiveQuestions.findIndex(q => q.id === activeVideoSlot) + 1}`}</span>
+                        <span className="font-bold text-white uppercase whitespace-nowrap leading-none">
+                          {activeVideoSlot === "full_video"
+                            ? "Vídeo Completo"
+                            : activeVideoSlot === "intro"
+                            ? "Apresentação (Intro)"
+                            : `Canal ${effectiveQuestions.findIndex(q => q.id === activeVideoSlot) + 1}`}
+                        </span>
                         <span className="text-[8px] bg-white/15 text-white px-1.5 py-0.5 rounded font-extrabold uppercase whitespace-nowrap leading-none">
                           1080p FHD
                         </span>
@@ -2469,17 +2605,7 @@ export default function App() {
                         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255, 255, 255, 0.08)_0%,transparent_70%)] opacity-80 pointer-events-none" />
                         
                         <div className="relative mb-4">
-                          <div 
-                            className="w-16 h-16 sm:w-20 sm:h-20 rounded-full flex items-center justify-center border-2 transition-all shadow-lg animate-pulse"
-                            style={{
-                              backgroundColor: currentTheme.colors.bgCard,
-                              borderColor: currentTheme.colors.borderMain,
-                              color: currentTheme.colors.primary,
-                              boxShadow: `0 0 25px ${currentTheme.glowColor}`
-                            }}
-                          >
-                            <Sparkles className="w-8 h-8 sm:w-10 sm:h-10" />
-                          </div>
+                          <AppLogo size="lg" />
                         </div>
 
                         <div className="space-y-2.5 max-w-md">
@@ -2492,7 +2618,7 @@ export default function App() {
                             }}
                           >
                             <span className="w-2 h-2 rounded-full animate-ping" style={{ backgroundColor: currentTheme.colors.primary }} />
-                            <span>Bioma {currentTheme.name} • {currentGroup.badge || currentGroup.name}</span>
+                            <span>{currentGroup.temaReferenciaNome} • {currentGroup.name}</span>
                           </div>
                           <h4 
                             className="font-display font-black text-lg sm:text-2xl uppercase tracking-wider leading-tight"
@@ -2501,10 +2627,7 @@ export default function App() {
                             {currentGroup.name}
                           </h4>
                           <p className="text-xs sm:text-sm font-mono leading-relaxed" style={{ color: currentTheme.colors.textSecondary }}>
-                            {effectiveIntroName ? `Vídeo de Abertura: "${effectiveIntroName}"` : "Apresentação Interativa em Vídeo HD"}
-                          </p>
-                          <p className="text-[11px] font-mono" style={{ color: currentTheme.colors.textMuted }}>
-                            Toque no botão abaixo para iniciar a apresentação com áudio ativo. Ao término do vídeo de introdução, a tela de interação e o microfone serão disponibilizados.
+                            {effectiveIntroName}
                           </p>
                         </div>
 
@@ -2512,7 +2635,7 @@ export default function App() {
                           type="button"
                           onClick={() => {
                             setVideoMuted(false);
-                            triggerVideoSlot("intro");
+                            triggerVideoSlot(isFullVideoGroup ? "full_video" : "intro");
                             triggerQualityAutoPulse("hd1080");
                           }}
                           className="mt-5 px-8 sm:px-10 py-3.5 sm:py-4 font-display font-black text-xs sm:text-sm uppercase tracking-wider rounded-2xl border-2 transition-all cursor-pointer flex items-center gap-3 group whitespace-nowrap leading-none shrink-0 hover:scale-105 active:scale-95 shadow-md"
@@ -2607,54 +2730,168 @@ export default function App() {
                           />
                         )}
 
-                        {/* END OF VIDEO: TELA QUE SOBE COM OS GATILHOS DISPONÍVEIS */}
-                        {videoFinished && (() => {
-                          const availableQuestions = effectiveQuestions.filter(q => !usedTriggerIds.includes(q.id));
-                          return (
-                            <div className="absolute inset-0 bg-black/85 backdrop-blur-md flex flex-col justify-end sm:justify-center items-center p-2 sm:p-6 z-40 select-none overflow-hidden animate-fade-in">
-                              
-                              {/* Slide-Up Sheet Container */}
-                              <div className="w-full max-w-2xl bg-zinc-950/95 border-t-4 sm:border-2 border-white rounded-t-3xl sm:rounded-3xl p-4 sm:p-6 shadow-[0_-12px_45px_rgba(255,255,255,0.12)] sm:shadow-[0_0_50px_rgba(0,0,0,0.95)] animate-slide-up flex flex-col max-h-[88vh] overflow-y-auto">
-                                
-                                {/* Top drag handle / indicator */}
-                                <div className="w-12 h-1.5 rounded-full bg-zinc-700 mx-auto mb-3 sm:hidden" />
+                        {/* END OF VIDEO: TELA DE INTERAÇÃO OU ENCERRAMENTO ("TCHAU") */}
+                        {videoFinished && (
+                          <div className="absolute inset-0 bg-black/88 backdrop-blur-md flex flex-col justify-end sm:justify-center items-center p-2 sm:p-6 z-40 select-none overflow-hidden animate-fade-in">
+                            <div className="w-full max-w-2xl bg-zinc-950/95 border-t-4 sm:border-2 border-white rounded-t-3xl sm:rounded-3xl p-4 sm:p-6 shadow-[0_-12px_45px_rgba(255,255,255,0.12)] sm:shadow-[0_0_50px_rgba(0,0,0,0.95)] animate-slide-up flex flex-col max-h-[88vh] overflow-y-auto">
+                              <div className="w-12 h-1.5 rounded-full bg-zinc-700 mx-auto mb-3 sm:hidden" />
 
-                                {/* Header with Badge & Clear User Instruction */}
-                                <div className="flex flex-col items-center justify-center text-center gap-2 mb-4">
-                                  <div className="flex flex-wrap items-center justify-center gap-2">
-                                    <div className="flex items-center gap-2 bg-white text-black px-3.5 py-1.5 rounded-full font-mono text-[9px] sm:text-[11px] font-black uppercase tracking-wider shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] whitespace-nowrap leading-none shrink-0">
-                                      <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                                      <span className="whitespace-nowrap leading-none">
-                                        {availableQuestions.length > 0 
-                                          ? `Vídeo Concluído • ${availableQuestions.length} Pergunta${availableQuestions.length > 1 ? "s" : ""} Disponíve${availableQuestions.length > 1 ? "is" : "l"}`
-                                          : "Vídeo Concluído • Todas as Perguntas Foram Assistidas"}
-                                      </span>
-                                    </div>
-                                    <span className="text-[9px] font-mono px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-700 text-zinc-300 font-bold uppercase flex items-center gap-1.5 shadow-sm">
-                                      <span className={`w-1.5 h-1.5 rounded-full ${experienceState === "ESCUTANDO" ? "bg-red-500 animate-ping" : "bg-emerald-400"}`} />
-                                      <span>Estado: {experienceState === "ESCUTANDO" ? "Escutando Fala" : "Aguardando Interação"}</span>
-                                    </span>
+                              {presentationEnded ? (
+                                /* TELA LIMPA DE ENCERRAMENTO APÓS O GATILHO "TCHAU" */
+                                <div className="flex flex-col items-center justify-center text-center gap-4 py-4">
+                                  <AppLogo size="md" />
+                                  <div 
+                                    className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full text-[10px] font-mono font-black uppercase tracking-wider border"
+                                    style={{
+                                      backgroundColor: currentTheme.colors.bgCard,
+                                      color: currentTheme.colors.primary,
+                                      borderColor: currentTheme.colors.borderMain
+                                    }}
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span>Apresentação Encerrada</span>
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    <h3 className="font-display font-black text-lg sm:text-2xl uppercase tracking-wider text-white">
+                                      Obrigado por acompanhar!
+                                    </h3>
+                                    <p className="text-xs font-mono text-zinc-300 max-w-md mx-auto">
+                                      A apresentação do grupo <strong className="text-white">{currentGroup.name}</strong> foi concluída.
+                                    </p>
+                                    <p className="text-[10px] font-mono text-zinc-400">
+                                      ASSISTENTES DA NATUREZA • 9º A – OSMARINHO
+                                    </p>
                                   </div>
 
-                                  <h3 className="font-display font-black text-sm sm:text-base md:text-lg uppercase tracking-wider text-white leading-snug">
-                                    O que você gostaria de saber agora?
-                                  </h3>
-                                  
-                                  <p className="text-[11px] sm:text-xs font-mono text-zinc-300 max-w-lg leading-relaxed">
-                                    {availableQuestions.length > 0
-                                      ? "Fale uma das perguntas no microfone ou clique diretamente no gatilho para assistir à resposta:"
-                                      : "Você já explorou todas as perguntas configuradas desta sessão."}
-                                  </p>
+                                  <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => openEcosystemQuiz(selectedThemeId)}
+                                      className="px-4 py-2.5 font-mono text-[10px] font-black uppercase rounded-xl border-2 cursor-pointer flex items-center gap-1.5 transition-all hover:scale-105 whitespace-nowrap"
+                                      style={{
+                                        backgroundColor: currentTheme.colors.accent,
+                                        color: currentTheme.colors.accentText,
+                                        borderColor: currentTheme.colors.borderMain
+                                      }}
+                                    >
+                                      <Trophy className="w-3.5 h-3.5 shrink-0" />
+                                      <span>Quiz do Ecossistema</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setHasSelectedGroup(false);
+                                        setHasStarted(false);
+                                        setVideoFinished(false);
+                                        setPresentationEnded(false);
+                                        presentationEndedRef.current = false;
+                                        setExperienceState("AGUARDANDO");
+                                      }}
+                                      className="px-4 py-2.5 font-mono text-[10px] font-black uppercase rounded-xl border-2 cursor-pointer flex items-center gap-1.5 transition-all hover:scale-105 whitespace-nowrap"
+                                      style={{
+                                        backgroundColor: currentTheme.colors.primary,
+                                        color: currentTheme.colors.primaryText,
+                                        borderColor: currentTheme.colors.borderMain
+                                      }}
+                                    >
+                                      <Users className="w-3.5 h-3.5 shrink-0" />
+                                      <span>Escolher Outro Grupo</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setHasEnteredApp(false);
+                                        setHasSelectedGroup(false);
+                                        setHasStarted(false);
+                                        setVideoFinished(false);
+                                        setPresentationEnded(false);
+                                        presentationEndedRef.current = false;
+                                        setExperienceState("AGUARDANDO");
+                                      }}
+                                      className="px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-white border-2 border-zinc-700 font-mono text-[10px] font-bold uppercase rounded-xl cursor-pointer flex items-center gap-1.5 transition-all whitespace-nowrap"
+                                    >
+                                      <Home className="w-3.5 h-3.5 shrink-0" />
+                                      <span>Tela Inicial</span>
+                                    </button>
+                                  </div>
                                 </div>
+                              ) : isFullVideoGroup ? (
+                                /* TELA PÓS-VÍDEO EXCLUSIVA DO GRUPO 5 (MIGUEL, MARIANA, BIANCA E LETÍCIA) */
+                                <div className="flex flex-col items-center justify-center text-center gap-4 py-4">
+                                  <AppLogo size="md" />
+                                  <div 
+                                    className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full text-[10px] font-mono font-black uppercase tracking-wider border"
+                                    style={{
+                                      backgroundColor: currentTheme.colors.bgCard,
+                                      color: currentTheme.colors.primary,
+                                      borderColor: currentTheme.colors.borderMain
+                                    }}
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span>Vídeo Completo Finalizado</span>
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    <h3 className="font-display font-black text-lg sm:text-2xl uppercase tracking-wider text-white">
+                                      {currentGroup.name}
+                                    </h3>
+                                    <p className="text-xs font-mono text-zinc-300 max-w-md mx-auto">
+                                      O vídeo completo da Caatinga foi concluído. Escolha uma das opções abaixo para continuar:
+                                    </p>
+                                  </div>
 
-                                {/* Voice button inside the slide-up screen for immediate speaking */}
-                                {availableQuestions.length > 0 && (
+                                  <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2 w-full sm:w-auto">
+                                    <button
+                                      type="button"
+                                      onClick={() => triggerVideoSlot("full_video")}
+                                      className="w-full sm:w-auto min-h-[46px] px-5 py-3 bg-zinc-900 hover:bg-zinc-800 text-white border-2 border-white/70 font-display font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-2 transition-all hover:scale-105 whitespace-nowrap"
+                                    >
+                                      <RotateCcw className="w-4 h-4 shrink-0" />
+                                      <span>ASSISTIR NOVAMENTE</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => openEcosystemQuiz("caatinga")}
+                                      className="w-full sm:w-auto min-h-[46px] px-6 py-3 font-display font-black text-xs uppercase tracking-wider rounded-xl border-2 cursor-pointer flex items-center justify-center gap-2 transition-all hover:scale-105 whitespace-nowrap shadow-lg"
+                                      style={{
+                                        backgroundColor: currentTheme.colors.primary,
+                                        color: currentTheme.colors.primaryText,
+                                        borderColor: currentTheme.colors.borderMain
+                                      }}
+                                    >
+                                      <Trophy className="w-4 h-4 shrink-0" />
+                                      <span>FAZER QUIZ DA CAATINGA</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                /* MODO DE INTERAÇÃO COM MICROFONE + GATILHOS DO GRUPO ATIVO */
+                                <>
+                                  <div className="flex flex-col items-center justify-center text-center gap-2 mb-4">
+                                    <div className="flex flex-wrap items-center justify-center gap-2">
+                                      <div className="flex items-center gap-2 bg-white text-black px-3.5 py-1.5 rounded-full font-mono text-[9px] sm:text-[11px] font-black uppercase tracking-wider shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] whitespace-nowrap leading-none shrink-0">
+                                        <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                                        <span className="whitespace-nowrap leading-none">
+                                          Vídeo Concluído • {effectiveQuestions.length} Gatilhos Disponíveis
+                                        </span>
+                                      </div>
+                                      <span className="text-[9px] font-mono px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-700 text-zinc-300 font-bold uppercase flex items-center gap-1.5 shadow-sm">
+                                        <span className={`w-1.5 h-1.5 rounded-full ${experienceState === "ESCUTANDO" ? "bg-red-500 animate-ping" : "bg-emerald-400"}`} />
+                                        <span>{experienceState === "ESCUTANDO" ? "Escutando Fala" : "Aguardando Interação"}</span>
+                                      </span>
+                                    </div>
+
+                                    <h3 className="font-display font-black text-sm sm:text-base md:text-lg uppercase tracking-wider text-white leading-snug">
+                                      Escolha um gatilho ou fale no microfone
+                                    </h3>
+                                  </div>
+
+                                  {/* Botão FALAR NO MICROFONE */}
                                   <div className="mb-3.5 flex flex-col items-center justify-center gap-1.5">
                                     <button
                                       type="button"
                                       onClick={toggleListening}
                                       className={`px-5 py-2.5 rounded-xl border-2 font-mono text-xs font-black uppercase flex items-center gap-2 transition-all cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] whitespace-nowrap leading-none shrink-0 ${
-                                        isListening
+                                        isListening || isRecordingMedia
                                           ? "bg-red-500 text-white border-black animate-pulse"
                                           : isAnalyzing
                                           ? "bg-amber-400 text-black border-black animate-bounce"
@@ -2663,68 +2900,35 @@ export default function App() {
                                     >
                                       <Mic className="w-4 h-4 shrink-0" />
                                       <span className="whitespace-nowrap leading-none font-extrabold">
-                                        {isListening 
-                                          ? "Ouvindo... Fale a pergunta agora" 
-                                          : isAnalyzing 
-                                          ? "Processando fala..." 
+                                        {isListening || isRecordingMedia
+                                          ? "Ouvindo... Fale a pergunta agora"
+                                          : isAnalyzing
+                                          ? "Processando fala..."
                                           : "FALAR NO MICROFONE"}
                                       </span>
                                     </button>
-                                    <span className="text-[9px] font-mono text-zinc-400">
-                                      {isListening 
-                                        ? "Escuta ativa: fale uma pergunta ou selecione um gatilho abaixo" 
-                                        : micPermission === "granted" 
-                                        ? "Microfone autorizado: clique no botão acima ou selecione um gatilho" 
-                                        : "Clique em FALAR NO MICROFONE para autorizar ou selecione um gatilho"}
-                                    </span>
                                   </div>
-                                )}
 
-                                {/* Perguntas Sugeridas Chips within Slide-Up Sheet */}
-                                {displaySuggestedQuestions.length > 0 && (
-                                  <div className="mb-3.5 p-2.5 bg-black/70 rounded-2xl border border-zinc-800 flex flex-col gap-1.5 text-left">
-                                    <span className="text-[9px] font-mono font-bold uppercase text-zinc-400 flex items-center gap-1">
-                                      <Sparkles className="w-3 h-3 text-white" />
-                                      Perguntas Sugeridas:
-                                    </span>
-                                    <div className="flex flex-wrap gap-1.5 max-h-[85px] overflow-y-auto">
-                                      {displaySuggestedQuestions.map((sug, idx) => (
-                                        <button
-                                          key={idx}
-                                          type="button"
-                                          onClick={() => handleIncomingCommand(sug)}
-                                          className="px-2.5 py-1 bg-zinc-900 hover:bg-white hover:text-black border border-zinc-700 hover:border-white text-zinc-200 text-[10px] font-mono font-semibold rounded-lg transition-all whitespace-nowrap cursor-pointer shadow-sm active:scale-95"
-                                        >
-                                          "{sug}"
-                                        </button>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-
-                                {/* Available triggers list (used triggers already removed) */}
-                                {availableQuestions.length > 0 ? (
-                                  <div className="flex flex-col gap-2.5 w-full max-h-[250px] sm:max-h-[280px] overflow-y-auto pr-1">
-                                    {availableQuestions.map((q) => (
+                                  {/* Exclusivamente os gatilhos do grupo ativo */}
+                                  <div className="flex flex-col gap-2.5 w-full max-h-[260px] sm:max-h-[300px] overflow-y-auto pr-1">
+                                    {effectiveQuestions.map((q, idx) => (
                                       <button
                                         key={q.id}
                                         type="button"
-                                        onClick={() => {
-                                          triggerVideoSlot(q.id);
-                                        }}
+                                        onClick={() => triggerVideoSlot(q.id)}
                                         disabled={!q.videoUrl}
                                         className="w-full relative bg-zinc-900/90 hover:bg-black border-2 border-zinc-800 hover:border-white px-4 py-3 rounded-2xl text-left transition-all duration-200 cursor-pointer outline-none focus:outline-none flex items-center justify-between gap-3 select-none shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:scale-[1.01] active:scale-[0.99] group min-w-0"
                                       >
                                         <div className="flex items-center gap-3 min-w-0 flex-1">
-                                          <div className="w-9 h-9 rounded-xl bg-black border border-zinc-700 flex items-center justify-center text-white group-hover:bg-white group-hover:text-black group-hover:border-black shrink-0 transition-colors shadow-sm">
-                                            <Mic className="w-4 h-4 shrink-0" />
+                                          <div className="w-9 h-9 rounded-xl bg-black border border-zinc-700 flex items-center justify-center text-white group-hover:bg-white group-hover:text-black group-hover:border-black shrink-0 transition-colors shadow-sm font-mono font-black text-xs">
+                                            {idx + 1}
                                           </div>
                                           <div className="min-w-0 flex-1">
                                             <div className="font-display font-black text-xs sm:text-sm text-white uppercase tracking-wider truncate leading-snug">
-                                              🎤 "{q.phrase}"
+                                              "{q.phrase}"
                                             </div>
                                             <div className="text-[10px] font-mono text-zinc-400 truncate mt-0.5 leading-normal">
-                                              {q.videoName || "Vídeo 1080p HD"}
+                                              {q.isEndingTrigger ? "Encerrar apresentação do grupo" : q.videoName}
                                             </div>
                                           </div>
                                         </div>
@@ -2736,84 +2940,44 @@ export default function App() {
                                       </button>
                                     ))}
                                   </div>
-                                ) : (
-                                  <div className="flex flex-col items-center justify-center p-6 bg-zinc-900/80 border-2 border-zinc-700 rounded-2xl text-center shadow-lg my-2">
-                                    <CheckCircle2 className="w-12 h-12 text-white mb-2" />
-                                    <h4 className="font-display font-black text-sm sm:text-base uppercase tracking-wider text-white">
-                                      Todos os Gatilhos Foram Executados!
-                                    </h4>
-                                    <p className="text-[11px] font-mono text-zinc-400 mt-1 mb-4 leading-relaxed max-w-sm">
-                                      Você já assistiu a todas as perguntas disponíveis desta sessão. Clique abaixo para reiniciar o ciclo e usá-las novamente:
-                                    </p>
+
+                                  {/* Bottom action buttons + Quiz do Ecossistema */}
+                                  <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-2.5 mt-4 pt-3 border-t border-zinc-800 w-full">
                                     <button
                                       type="button"
-                                      onClick={restoreUsedTriggers}
-                                      className="px-5 py-2.5 bg-white text-black font-display font-black text-xs uppercase tracking-wider rounded-xl border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:bg-zinc-200 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap leading-none shrink-0"
+                                      onClick={handleReplayVideo}
+                                      className="flex items-center gap-1.5 px-3 py-2 bg-zinc-900 border-2 border-black hover:border-zinc-600 text-white font-mono text-[10px] font-bold uppercase rounded-xl shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-0.5 transition-all cursor-pointer whitespace-nowrap leading-none shrink-0"
                                     >
-                                      <RefreshCw className="w-4 h-4 shrink-0" />
-                                      <span className="whitespace-nowrap leading-none">Reiniciar Ciclo de Perguntas</span>
+                                      <RotateCcw className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                                      <span className="whitespace-nowrap leading-none">Rever Vídeo</span>
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => triggerVideoSlot("intro")}
+                                      className="flex items-center gap-1.5 px-3 py-2 bg-zinc-900 border-2 border-black hover:border-white text-zinc-200 font-mono text-[10px] font-bold uppercase rounded-xl shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-0.5 transition-all cursor-pointer whitespace-nowrap leading-none shrink-0"
+                                    >
+                                      <Play className="w-3.5 h-3.5 text-white shrink-0" />
+                                      <span className="whitespace-nowrap leading-none">Introdução</span>
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => openEcosystemQuiz(selectedThemeId)}
+                                      className="flex items-center gap-1.5 px-3.5 py-2 border-2 font-mono text-[10px] font-black uppercase rounded-xl shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-0.5 transition-all cursor-pointer whitespace-nowrap leading-none shrink-0"
+                                      style={{
+                                        backgroundColor: currentTheme.colors.primary,
+                                        color: currentTheme.colors.primaryText,
+                                        borderColor: currentTheme.colors.borderMain
+                                      }}
+                                    >
+                                      <Trophy className="w-3.5 h-3.5 shrink-0" />
+                                      <span className="whitespace-nowrap leading-none">QUIZ DO ECOSSISTEMA</span>
                                     </button>
                                   </div>
-                                )}
-
-                                {/* Bottom action buttons */}
-                                <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-2.5 mt-4 pt-3 border-t border-zinc-800 w-full">
-                                  <button
-                                    type="button"
-                                    onClick={handleReplayVideo}
-                                    className="flex items-center gap-1.5 px-3 py-2 bg-zinc-900 border-2 border-black hover:border-zinc-600 text-white font-mono text-[10px] font-bold uppercase rounded-xl shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-0.5 transition-all cursor-pointer whitespace-nowrap leading-none shrink-0"
-                                  >
-                                    <RotateCcw className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                                    <span className="whitespace-nowrap leading-none">Rever Vídeo</span>
-                                  </button>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => triggerVideoSlot("intro")}
-                                    className="flex items-center gap-1.5 px-3 py-2 bg-zinc-900 border-2 border-black hover:border-white text-zinc-200 font-mono text-[10px] font-bold uppercase rounded-xl shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-0.5 transition-all cursor-pointer whitespace-nowrap leading-none shrink-0"
-                                  >
-                                    <Play className="w-3.5 h-3.5 text-white shrink-0" />
-                                    <span className="whitespace-nowrap leading-none">Apresentação</span>
-                                  </button>
-
-                                  {usedTriggerIds.length > 0 && availableQuestions.length > 0 && (
-                                    <button
-                                      type="button"
-                                      onClick={restoreUsedTriggers}
-                                      className="flex items-center gap-1.5 px-3 py-2 bg-zinc-900 hover:bg-zinc-800 border-2 border-zinc-700 text-white font-mono text-[10px] font-bold uppercase rounded-xl shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-0.5 transition-all cursor-pointer whitespace-nowrap leading-none shrink-0"
-                                      title="Restaurar gatilhos que já foram executados"
-                                    >
-                                      <RefreshCw className="w-3 h-3 shrink-0" />
-                                      <span className="whitespace-nowrap leading-none">Restaurar ({usedTriggerIds.length})</span>
-                                    </button>
-                                  )}
-
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setViewedSlots([]);
-                                      setUsedTriggerIds([]);
-                                      try { safeStorage.removeItem("eco_used_trigger_ids"); } catch (_) {}
-                                      triggerVideoSlot("intro");
-                                    }}
-                                    className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-zinc-200 text-black border-2 border-black font-mono text-[10px] font-black uppercase rounded-xl shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-0.5 transition-all cursor-pointer whitespace-nowrap leading-none shrink-0"
-                                  >
-                                    <Play className="w-3.5 h-3.5 fill-black shrink-0" />
-                                    <span className="whitespace-nowrap leading-none">Reiniciar do Início</span>
-                                  </button>
-                                </div>
-                              </div>
+                                </>
+                              )}
                             </div>
-                          );
-                        })()}
-
-                        {/* Video Controls bar inside iframe overlay */}
-                        {!isIntroSpecialVideo && (
-                          <div className="absolute bottom-3 left-3 z-10 bg-black/85 border border-zinc-700 text-white text-[10px] font-mono px-2.5 py-1 rounded flex items-center gap-2 shadow-sm">
-                            <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                            <span className="font-extrabold text-white">1080p HD AUTOMÁTICO</span>
-                            <span className="text-zinc-600">|</span>
-                            <span className="text-zinc-300 font-mono text-[9px]">{isYouTubeUrl(getActiveVideoUrl()) ? "Qualidade 1080p Ativa" : "Mídia 1080p"}</span>
                           </div>
                         )}
                       </div>
@@ -2823,9 +2987,9 @@ export default function App() {
                           <Video className="w-7 h-7 text-white" />
                         </div>
                         <div className="space-y-2">
-                          <h4 className="font-bold text-sm text-white uppercase tracking-wider">Nenhum Vídeo Carregado nesta Rota</h4>
+                          <h4 className="font-bold text-sm text-white uppercase tracking-wider">Nenhum Vídeo Carregado</h4>
                           <p className="text-xs text-zinc-400 leading-relaxed">
-                            Vá no menu de <span className="text-white font-bold cursor-pointer underline" onClick={() => setActiveTab("settings")}>Configurações</span> para inserir o link do YouTube ou carregar arquivos.
+                            Selecione um grupo para carregar seus vídeos configurados.
                           </p>
                         </div>
                       </div>
@@ -2852,68 +3016,93 @@ export default function App() {
                     {!isFullscreen && (
                       <div className="absolute bottom-3 left-3 z-10 hidden xs:flex items-center gap-1.5 bg-black/85 backdrop-blur-md px-2.5 py-1 rounded-lg border border-zinc-700 text-[9px] font-mono shadow-sm pointer-events-none">
                         <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                        <span className="text-white font-extrabold uppercase">1080p HD AUTO</span>
+                        <span className="text-white font-extrabold uppercase">1080p HD</span>
                         <span className="text-zinc-600">•</span>
-                        <span className="text-zinc-300 font-bold uppercase truncate max-w-[130px] sm:max-w-[200px]">
-                          {isYouTubeUrl(getActiveVideoUrl()) ? "Ajuste 1080p Automático" : getActiveVideoTitle()}
+                        <span className="text-zinc-300 font-bold uppercase truncate max-w-[140px] sm:max-w-[220px]">
+                          {getActiveVideoTitle()}
                         </span>
                       </div>
                     )}
 
                     {/* Active Route Slot Indicators on the bottom right corner */}
                     {!isFullscreen && (
-                      <div className="absolute bottom-3 right-3 z-10 flex flex-wrap gap-1 bg-zinc-950/90 backdrop-blur-md p-1 rounded-lg border border-zinc-800 text-[10px] font-mono shadow-sm max-w-[180px]">
-                        <button
-                          onClick={() => triggerVideoSlot("intro")}
-                          disabled={!effectiveIntroUrl}
-                          className={`px-2 py-0.5 rounded font-bold transition-all disabled:opacity-30 disabled:cursor-not-allowed ${activeVideoSlot === "intro" ? "bg-white text-black border border-black" : "text-zinc-400 hover:text-white"}`}
-                          title="Ir para o vídeo inicial"
-                        >
-                          Intro
-                        </button>
-                        {effectiveQuestions.map((q, idx) => {
-                          const isUsed = usedTriggerIds.includes(q.id);
-                          return (
+                      <div className="absolute bottom-3 right-3 z-10 flex flex-wrap gap-1 bg-zinc-950/90 backdrop-blur-md p-1 rounded-lg border border-zinc-800 text-[10px] font-mono shadow-sm max-w-[230px]">
+                        {isFullVideoGroup ? (
+                          <button
+                            onClick={() => triggerVideoSlot("full_video")}
+                            className="px-2 py-0.5 rounded font-bold transition-all cursor-pointer bg-white text-black border border-black"
+                            title="Reproduzir vídeo completo"
+                          >
+                            Vídeo Completo
+                          </button>
+                        ) : (
+                          <>
                             <button
-                              key={q.id}
-                              onClick={() => triggerVideoSlot(q.id)}
-                              disabled={!q.videoUrl}
-                              className={`px-2 py-0.5 rounded font-bold transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
-                                activeVideoSlot === q.id 
-                                  ? "bg-white text-black border border-black" 
-                                  : isUsed
-                                  ? "text-zinc-600 line-through hover:text-zinc-400"
-                                  : "text-zinc-400 hover:text-white"
-                              }`}
-                              title={isUsed ? `Canal ${idx + 1} (Já utilizado nesta sessão)` : `Canal da Pergunta ${idx + 1}`}
+                              onClick={() => triggerVideoSlot("intro")}
+                              disabled={!effectiveIntroUrl}
+                              className={`px-2 py-0.5 rounded font-bold transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer ${activeVideoSlot === "intro" ? "bg-white text-black border border-black" : "text-zinc-400 hover:text-white"}`}
+                              title="Ir para o vídeo inicial"
                             >
-                              Q{idx + 1}{isUsed ? "✓" : ""}
+                              Intro
                             </button>
-                          );
-                        })}
+                            {effectiveQuestions.map((q, idx) => {
+                              const isWatched = viewedSlots.includes(q.id);
+                              return (
+                                <button
+                                  key={q.id}
+                                  onClick={() => triggerVideoSlot(q.id)}
+                                  disabled={!q.videoUrl}
+                                  className={`px-2 py-0.5 rounded font-bold transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer ${
+                                    activeVideoSlot === q.id 
+                                      ? "bg-white text-black border border-black" 
+                                      : isWatched
+                                      ? "text-emerald-300 hover:text-white"
+                                      : "text-zinc-400 hover:text-white"
+                                  }`}
+                                  title={`Gatilho ${idx + 1}: ${q.phrase}`}
+                                >
+                                  G{idx + 1}
+                                </button>
+                              );
+                            })}
+                          </>
+                        )}
                       </div>
                     )}
 
-                    {/* Floating Voice & Quick Control Dock when in Fullscreen (Apenas ao terminar o vídeo) */}
-                    {isFullscreen && videoFinished && (
+                    {/* Floating Voice & Quick Control Dock when in Fullscreen */}
+                    {isFullscreen && videoFinished && !presentationEnded && (
                       <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2.5 bg-black/85 backdrop-blur-md px-4 py-2 rounded-full border border-zinc-800 shadow-[0_4px_30px_rgba(0,0,0,0.9)] max-w-[95vw]">
-                        <button
-                          onClick={toggleListening}
-                          className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-mono text-[10px] font-black uppercase border transition-all cursor-pointer ${
-                            isListening
-                              ? "bg-red-500 text-white border-white shadow-[0_0_12px_rgba(239,68,68,0.6)] animate-pulse"
-                              : "bg-white text-black border-black hover:bg-white active:scale-95"
-                          }`}
-                        >
-                          {isListening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
-                          <span>{isListening ? "Ouvindo..." : "Falar"}</span>
-                        </button>
+                        {!isFullVideoGroup ? (
+                          <button
+                            onClick={toggleListening}
+                            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-mono text-[10px] font-black uppercase border transition-all cursor-pointer ${
+                              isListening
+                                ? "bg-red-500 text-white border-white shadow-[0_0_12px_rgba(239,68,68,0.6)] animate-pulse"
+                                : "bg-white text-black border-black hover:bg-white active:scale-95"
+                            }`}
+                          >
+                            {isListening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+                            <span>{isListening ? "Ouvindo..." : "Falar"}</span>
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              exitFullscreenAuto();
+                              openEcosystemQuiz("caatinga");
+                            }}
+                            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-mono text-[10px] font-black uppercase border transition-all cursor-pointer bg-white text-black border-black"
+                          >
+                            <Trophy className="w-3.5 h-3.5" />
+                            <span>Fazer Quiz da Caatinga</span>
+                          </button>
+                        )}
                         
                         <div className="h-4 w-px bg-zinc-800" />
 
                         <button
                           onClick={handleReplayVideo}
-                          className="text-zinc-400 hover:text-white p-1.5 rounded transition-colors"
+                          className="text-zinc-400 hover:text-white p-1.5 rounded transition-colors cursor-pointer"
                           title="Rever Vídeo"
                         >
                           <RotateCcw className="w-3.5 h-3.5" />
@@ -2921,7 +3110,7 @@ export default function App() {
 
                         <button
                           onClick={() => setVideoFit(prev => prev === "cover" ? "contain" : "cover")}
-                          className="text-zinc-400 hover:text-white text-[9px] font-mono px-2 py-1 rounded border border-zinc-800"
+                          className="text-zinc-400 hover:text-white text-[9px] font-mono px-2 py-1 rounded border border-zinc-800 cursor-pointer"
                           title="Alternar Encaixe de Vídeo"
                         >
                           {videoFit === "cover" ? "Preenchido" : "Original"}
@@ -2931,7 +3120,7 @@ export default function App() {
 
                         <button
                           onClick={toggleFullscreen}
-                          className="flex items-center gap-1 text-zinc-300 hover:text-white text-[9px] font-mono font-bold bg-zinc-900 px-2 py-1 rounded border border-zinc-800"
+                          className="flex items-center gap-1 text-zinc-300 hover:text-white text-[9px] font-mono font-bold bg-zinc-900 px-2 py-1 rounded border border-zinc-800 cursor-pointer"
                           title="Sair da Tela Inteira"
                         >
                           <Minimize className="w-3 h-3 text-white" />
@@ -2975,39 +3164,41 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Dedicated Primary Mobile Voice Button */}
-                    <button
-                      type="button"
-                      onClick={toggleListening}
-                      className={`w-full py-2.5 px-3 rounded-lg border-2 font-mono text-[11px] font-black uppercase flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm active:scale-98 ${
-                        isListening || isRecordingMedia
-                          ? "bg-red-500 text-white border-white animate-pulse shadow-[0_0_12px_rgba(239,68,68,0.6)]"
-                          : "bg-white text-black border-black hover:bg-white/90 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
-                      }`}
-                    >
-                      {isListening || isRecordingMedia ? (
-                        <>
-                          <MicOff className="w-4 h-4" />
-                          <span>Ouvindo no Celular... ({recordingDuration}s) Toque p/ Parar</span>
-                        </>
-                      ) : isTranscribing ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin text-black" />
-                          <span>Transcrevendo Fala com IA...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Mic className="w-4 h-4" />
-                          <span>Toque Aqui para Falar (Microfone)</span>
-                        </>
-                      )}
-                    </button>
+                    {/* Dedicated Primary Mobile Voice Button (Apenas grupos com gatilhos de voz) */}
+                    {!presentationEnded && !isFullVideoGroup && (
+                      <button
+                        type="button"
+                        onClick={toggleListening}
+                        className={`w-full py-2.5 px-3 rounded-lg border-2 font-mono text-[11px] font-black uppercase flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm active:scale-98 ${
+                          isListening || isRecordingMedia
+                            ? "bg-red-500 text-white border-white animate-pulse shadow-[0_0_12px_rgba(239,68,68,0.6)]"
+                            : "bg-white text-black border-black hover:bg-white/90 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                        }`}
+                      >
+                        {isListening || isRecordingMedia ? (
+                          <>
+                            <MicOff className="w-4 h-4" />
+                            <span>Ouvindo no Celular... ({recordingDuration}s) Toque p/ Parar</span>
+                          </>
+                        ) : isTranscribing ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 animate-spin text-black" />
+                            <span>Transcrevendo Fala com IA...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Mic className="w-4 h-4" />
+                            <span>Toque Aqui para Falar (Microfone)</span>
+                          </>
+                        )}
+                      </button>
+                    )}
                   </div>
                 )}
 
               </div>
 
-              {/* Gatilhos Disponíveis (Interactive Triggers Panel) */}
+              {/* Gatilhos Disponíveis ou Tela de Encerramento */}
               {!hidePanels && !isFullscreen && (
                 <div 
                   className={`backdrop-blur-md border-2 sm:border-3 rounded-2xl sm:rounded-3xl p-5 sm:p-6 shadow-[5px_5px_0px_0px_rgba(0,0,0,1)] flex flex-col gap-4 text-left transition-all duration-300 ${
@@ -3021,159 +3212,215 @@ export default function App() {
                     "--tw-ring-color": currentTheme.colors.primary
                   }}
                 >
-                  {(() => {
-                    const availableQuestions = effectiveQuestions.filter(q => !usedTriggerIds.includes(q.id));
-                    return (
-                      <>
-                        <div 
-                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b pb-3"
-                          style={{ borderColor: currentTheme.colors.borderSubtle }}
+                  {presentationEnded ? (
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-2">
+                      <div className="flex items-center gap-3">
+                        <CheckCircle2 className="w-7 h-7 shrink-0" style={{ color: currentTheme.colors.primary }} />
+                        <div>
+                          <h3 className="font-display font-black text-sm uppercase tracking-wider" style={{ color: currentTheme.colors.textPrimary }}>
+                            Apresentação de {currentGroup.name} Encerrada
+                          </h3>
+                          <p className="text-[11px] font-mono mt-0.5" style={{ color: currentTheme.colors.textMuted }}>
+                            O microfone foi desativado após o encerramento. Selecione outro grupo ou volte à tela inicial.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHasSelectedGroup(false);
+                            setHasStarted(false);
+                            setVideoFinished(false);
+                            setPresentationEnded(false);
+                            presentationEndedRef.current = false;
+                            setExperienceState("AGUARDANDO");
+                          }}
+                          className="px-4 py-2 font-mono font-black text-[10px] uppercase rounded-xl border cursor-pointer flex items-center gap-1.5"
+                          style={{
+                            backgroundColor: currentTheme.colors.primary,
+                            color: currentTheme.colors.primaryText,
+                            borderColor: currentTheme.colors.borderMain
+                          }}
                         >
-                          <div className="flex items-center gap-2.5">
-                            <span 
-                              className={`w-2.5 h-2.5 rounded-full ${videoFinished ? "animate-ping" : ""}`}
-                              style={{ backgroundColor: currentTheme.colors.primary }}
-                            />
-                            <h3 
-                              className="font-display font-black text-xs sm:text-sm uppercase tracking-wider"
-                              style={{ color: currentTheme.colors.textPrimary }}
-                            >
-                              Gatilhos Disponíveis ({availableQuestions.length} de {effectiveQuestions.length})
-                            </h3>
-                            <span 
-                              className="text-[9px] font-mono px-2 py-0.5 rounded font-extrabold border uppercase"
+                          <Users className="w-3.5 h-3.5" />
+                          <span>Outros Grupos</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHasEnteredApp(false);
+                            setHasSelectedGroup(false);
+                            setHasStarted(false);
+                            setVideoFinished(false);
+                            setPresentationEnded(false);
+                            presentationEndedRef.current = false;
+                            setExperienceState("AGUARDANDO");
+                          }}
+                          className="px-4 py-2 font-mono font-bold text-[10px] uppercase rounded-xl border cursor-pointer flex items-center gap-1.5"
+                          style={{
+                            backgroundColor: currentTheme.colors.bgCard,
+                            color: currentTheme.colors.textPrimary,
+                            borderColor: currentTheme.colors.borderSubtle
+                          }}
+                        >
+                          <Home className="w-3.5 h-3.5" />
+                          <span>Início</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : isFullVideoGroup ? (
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-2">
+                      <div className="space-y-1">
+                        <h3 className="font-display font-black text-sm sm:text-base uppercase tracking-wider" style={{ color: currentTheme.colors.textPrimary }}>
+                          {currentGroup.name} • Apresentação Completa (Caatinga)
+                        </h3>
+                        <p className="text-[11px] font-mono" style={{ color: currentTheme.colors.textMuted }}>
+                          {videoFinished
+                            ? "Apresentação finalizada. Escolha assistir novamente ou iniciar o Quiz da Caatinga."
+                            : "Reproduzindo vídeo completo da apresentação. Ao término, você poderá assistir novamente ou fazer o Quiz da Caatinga."}
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => triggerVideoSlot("full_video")}
+                          className="min-h-[42px] px-4 py-2 font-mono font-bold text-[10px] uppercase rounded-xl border cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+                          style={{
+                            backgroundColor: currentTheme.colors.bgCard,
+                            color: currentTheme.colors.textPrimary,
+                            borderColor: currentTheme.colors.borderSubtle
+                          }}
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                          <span>ASSISTIR NOVAMENTE</span>
+                        </button>
+                        {videoFinished && (
+                          <button
+                            type="button"
+                            onClick={() => openEcosystemQuiz("caatinga")}
+                            className="min-h-[42px] px-4 py-2 font-mono font-black text-[10px] uppercase rounded-xl border-2 cursor-pointer flex items-center gap-1.5 whitespace-nowrap shadow-md"
+                            style={{
+                              backgroundColor: currentTheme.colors.primary,
+                              color: currentTheme.colors.primaryText,
+                              borderColor: currentTheme.colors.borderMain
+                            }}
+                          >
+                            <Trophy className="w-3.5 h-3.5 shrink-0" />
+                            <span>FAZER QUIZ DA CAATINGA</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div 
+                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b pb-3"
+                        style={{ borderColor: currentTheme.colors.borderSubtle }}
+                      >
+                        <div className="flex items-center gap-2.5 flex-wrap">
+                          <span 
+                            className={`w-2.5 h-2.5 rounded-full ${videoFinished ? "animate-ping" : ""}`}
+                            style={{ backgroundColor: currentTheme.colors.primary }}
+                          />
+                          <h3 
+                            className="font-display font-black text-xs sm:text-sm uppercase tracking-wider"
+                            style={{ color: currentTheme.colors.textPrimary }}
+                          >
+                            Gatilhos do Grupo ({effectiveQuestions.length})
+                          </h3>
+                          <span 
+                            className="text-[9px] font-mono px-2 py-0.5 rounded font-extrabold border uppercase"
+                            style={{
+                              backgroundColor: currentTheme.colors.bgCard,
+                              color: currentTheme.colors.textSecondary,
+                              borderColor: currentTheme.colors.borderSubtle
+                            }}
+                          >
+                            {videoFinished ? "Fale no Microfone ou Toque" : "Selecione a Qualquer Momento"}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap self-start sm:self-auto">
+                          <button
+                            type="button"
+                            onClick={() => openEcosystemQuiz(selectedThemeId)}
+                            className="text-[10px] font-mono font-black uppercase flex items-center gap-1.5 cursor-pointer px-3 py-1.5 rounded-lg border transition-all hover:scale-105 whitespace-nowrap"
+                            style={{
+                              backgroundColor: currentTheme.colors.primary,
+                              color: currentTheme.colors.primaryText,
+                              borderColor: currentTheme.colors.borderMain
+                            }}
+                          >
+                            <Trophy className="w-3 h-3 shrink-0" />
+                            <span>QUIZ DO ECOSSISTEMA</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => triggerVideoSlot("intro")}
+                            className="text-[10px] font-mono font-bold hover:underline flex items-center gap-1 cursor-pointer px-2.5 py-1.5 rounded-lg border whitespace-nowrap"
+                            style={{
+                              backgroundColor: currentTheme.colors.bgCard,
+                              color: currentTheme.colors.primary,
+                              borderColor: currentTheme.colors.borderSubtle
+                            }}
+                          >
+                            <RotateCcw className="w-3 h-3 shrink-0" />
+                            <span>Rever Introdução</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Exclusivamente os gatilhos do grupo ativo (sem remoção nem duplicação) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                        {effectiveQuestions.map((q, idx) => {
+                          const isActive = activeVideoSlot === q.id && !videoFinished;
+                          return (
+                            <button
+                              key={q.id}
+                              type="button"
+                              onClick={() => triggerVideoSlot(q.id)}
+                              disabled={!q.videoUrl}
+                              className={`group relative flex items-center justify-between gap-3 p-3.5 rounded-xl border-2 transition-all cursor-pointer text-left min-w-0 ${
+                                isActive ? "scale-[1.01]" : "hover:brightness-110 active:scale-98"
+                              } disabled:opacity-30 disabled:pointer-events-none`}
                               style={{
-                                backgroundColor: currentTheme.colors.bgCard,
-                                color: currentTheme.colors.textSecondary,
-                                borderColor: currentTheme.colors.borderSubtle
+                                backgroundColor: isActive ? currentTheme.colors.bgElevated : currentTheme.colors.bgCard,
+                                borderColor: isActive ? currentTheme.colors.borderMain : currentTheme.colors.borderSubtle,
+                                boxShadow: isActive ? `0 0 14px ${currentTheme.colors.glow}` : "2px 2px 0px 0px rgba(0,0,0,1)"
                               }}
                             >
-                              {videoFinished ? "Aguardando Próximo Gatilho" : "Fale ou Toque a Qualquer Momento"}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            {usedTriggerIds.length > 0 && (
-                              <button
-                                type="button"
-                                onClick={restoreUsedTriggers}
-                                className="text-[10px] font-mono font-bold hover:underline flex items-center gap-1 cursor-pointer px-2 py-0.5 rounded border"
-                                style={{
-                                  backgroundColor: currentTheme.colors.bgCard,
-                                  color: currentTheme.colors.primary,
-                                  borderColor: currentTheme.colors.borderSubtle
-                                }}
-                                title="Reativar todos os gatilhos apagados"
-                              >
-                                <RefreshCw className="w-3 h-3" />
-                                <span>Restaurar {usedTriggerIds.length} Usado{usedTriggerIds.length > 1 ? "s" : ""}</span>
-                              </button>
-                            )}
-                            <span className="text-[10px] font-mono" style={{ color: currentTheme.colors.textMuted }}>
-                              Toque para reproduzir
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Grid of Triggers / Gatilhos (Filtered: apenas os não utilizados) */}
-                        {availableQuestions.length > 0 ? (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                            {availableQuestions.map((q) => {
-                              const originalIdx = effectiveQuestions.findIndex(item => item.id === q.id);
-                              const isActive = activeVideoSlot === q.id && !videoFinished;
-                              return (
-                                <button
-                                  key={q.id}
-                                  type="button"
-                                  onClick={() => triggerVideoSlot(q.id)}
-                                  disabled={!q.videoUrl}
-                                  className={`group relative flex items-center justify-between gap-3 p-3.5 rounded-xl border-2 transition-all cursor-pointer text-left min-w-0 ${
-                                    isActive
-                                      ? "scale-[1.01]"
-                                      : "hover:brightness-110 active:scale-98"
-                                  } disabled:opacity-30 disabled:pointer-events-none`}
-                                  style={{
-                                    backgroundColor: isActive ? currentTheme.colors.bgElevated : currentTheme.colors.bgCard,
-                                    borderColor: isActive ? currentTheme.colors.borderMain : currentTheme.colors.borderSubtle,
-                                    boxShadow: isActive ? `0 0 14px ${currentTheme.colors.glow}` : "2px 2px 0px 0px rgba(0,0,0,1)"
-                                  }}
-                                >
-                                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border ${
-                                      isActive ? "bg-white text-black border-black" : "bg-black text-white border-zinc-800"
-                                    }`}>
-                                      <Mic className="w-4 h-4 shrink-0" />
-                                    </div>
-                                    <div className="min-w-0 flex-1">
-                                      <div className="text-[9px] font-mono text-zinc-400 font-bold uppercase tracking-wider leading-none mb-1">
-                                        Canal {originalIdx + 1}
-                                      </div>
-                                      <div className="font-display font-black text-xs sm:text-sm text-white group-hover:text-white truncate leading-snug">
-                                        "{q.phrase}"
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  <span className="shrink-0 text-[9px] font-mono font-bold uppercase px-2.5 py-1.5 rounded bg-black border border-zinc-800 text-zinc-300 flex items-center gap-1 group-hover:border-white group-hover:text-white whitespace-nowrap leading-none">
-                                    <Play className="w-2.5 h-2.5 fill-current text-white shrink-0" />
-                                    <span className="whitespace-nowrap leading-none">Assistir</span>
-                                  </span>
-                                </button>
-                              );
-                            })}
-
-                            {/* Intro restart button in triggers panel */}
-                            <button
-                              type="button"
-                              onClick={() => triggerVideoSlot("intro")}
-                              disabled={!effectiveIntroUrl}
-                              className="group relative flex items-center justify-between gap-3 p-3.5 rounded-xl border-2 bg-zinc-900/60 hover:bg-zinc-850 border-zinc-800 hover:border-zinc-700 text-zinc-300 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] disabled:opacity-30 disabled:pointer-events-none cursor-pointer active:scale-98 min-w-0"
-                            >
                               <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border bg-black text-zinc-400 border-zinc-800 group-hover:text-white">
-                                  <RotateCcw className="w-4 h-4 shrink-0" />
+                                <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border font-mono font-black text-xs ${
+                                  isActive ? "bg-white text-black border-black" : "bg-black text-white border-zinc-800"
+                                }`}>
+                                  {idx + 1}
                                 </div>
                                 <div className="min-w-0 flex-1">
                                   <div className="text-[9px] font-mono text-zinc-400 font-bold uppercase tracking-wider leading-none mb-1">
-                                    Apresentação
+                                    Gatilho {idx + 1}
                                   </div>
-                                  <div className="font-display font-black text-xs sm:text-sm text-zinc-200 group-hover:text-white truncate leading-snug">
-                                    "Introdução"
+                                  <div className="font-display font-black text-xs sm:text-sm text-white group-hover:text-white truncate leading-snug">
+                                    "{q.phrase}"
                                   </div>
                                 </div>
                               </div>
-                              <span className="shrink-0 text-[9px] font-mono font-bold uppercase px-2.5 py-1.5 rounded bg-black border border-zinc-800 text-zinc-400 flex items-center gap-1 group-hover:text-white whitespace-nowrap leading-none">
-                                <Play className="w-2.5 h-2.5 fill-current text-zinc-400 shrink-0" />
+
+                              <span className="shrink-0 text-[9px] font-mono font-bold uppercase px-2.5 py-1.5 rounded bg-black border border-zinc-800 text-zinc-300 flex items-center gap-1 group-hover:border-white group-hover:text-white whitespace-nowrap leading-none">
+                                <Play className="w-2.5 h-2.5 fill-current text-white shrink-0" />
                                 <span className="whitespace-nowrap leading-none">Assistir</span>
                               </span>
                             </button>
-                          </div>
-                        ) : (
-                          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 rounded-xl bg-zinc-900/40 border border-zinc-800">
-                            <div className="flex items-center gap-3">
-                              <CheckCircle2 className="w-6 h-6 text-white shrink-0" />
-                              <div>
-                                <p className="font-bold text-xs uppercase text-white">Todos os gatilhos foram executados nesta sessão</p>
-                                <p className="text-[10px] font-mono text-zinc-400">Clique ao lado para reiniciar o ciclo e reativar todos os comandos apagados.</p>
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={restoreUsedTriggers}
-                              className="px-4 py-2 bg-white text-black font-mono font-black text-[10px] uppercase rounded-xl border border-black hover:bg-white transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
-                            >
-                              <RefreshCw className="w-3.5 h-3.5" />
-                              <span>Reiniciar Ciclo</span>
-                            </button>
-                          </div>
-                        )}
-                      </>
-                    );
-                  })()}
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 
-              {/* Seamless Voice Chat & Manual Companion Box */}
-              {!hidePanels && !isFullscreen && (
+              {/* Painel de Voz & Interação (Ocultado automaticamente após encerrar com "Tchau" ou no Grupo 5 Vídeo Completo) */}
+              {!hidePanels && !isFullscreen && !presentationEnded && !isFullVideoGroup && (
                 <div 
                   className="backdrop-blur-md border-3 rounded-3xl p-6 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] text-left flex flex-col md:flex-row gap-6 items-stretch transition-all duration-300"
                   style={{
@@ -3182,7 +3429,6 @@ export default function App() {
                     boxShadow: `6px 6px 0px 0px rgba(0,0,0,1), 0 0 25px ${currentTheme.colors.glow}`
                   }}
                 >
-                  
                   {/* Speaking Control Badge */}
                   <div 
                     className="border-2 rounded-2xl p-6 flex flex-col items-center justify-center text-center gap-4 min-w-[220px] shrink-0"
@@ -3191,8 +3437,6 @@ export default function App() {
                       borderColor: currentTheme.colors.borderSubtle
                     }}
                   >
-                    
-                    {/* Large Speak Button */}
                     <button
                       type="button"
                       onClick={toggleListening}
@@ -3224,38 +3468,21 @@ export default function App() {
                           <span className="text-[10px] font-mono font-bold text-red-500 uppercase tracking-wider block animate-pulse">
                             {isRecordingMedia ? `GRAVANDO VOZ (${recordingDuration}s)` : "ESCUTA ATIVA..."}
                           </span>
-                          
-                          {/* Interactive dynamic audio lightbars linked to live audioLevel */}
                           <div className="flex items-end justify-center gap-1.5 h-6 pt-1">
-                            <div 
-                              className="w-1.5 bg-red-400 rounded-full transition-all duration-75"
-                              style={{ height: `${Math.max(6, Math.min(24, Math.round(audioLevel * 0.25)))}px` }}
-                            />
-                            <div 
-                              className="w-1.5 bg-white rounded-full border border-black transition-all duration-75"
-                              style={{ height: `${Math.max(10, Math.min(24, Math.round(audioLevel * 0.4)))}px` }}
-                            />
-                            <div 
-                              className="w-1.5 bg-white rounded-full border border-black transition-all duration-75"
-                              style={{ height: `${Math.max(8, Math.min(24, Math.round(audioLevel * 0.35)))}px` }}
-                            />
-                            <div 
-                              className="w-1.5 bg-red-400 rounded-full transition-all duration-75"
-                              style={{ height: `${Math.max(6, Math.min(24, Math.round(audioLevel * 0.2)))}px` }}
-                            />
+                            <div className="w-1.5 bg-red-400 rounded-full transition-all duration-75" style={{ height: `${Math.max(6, Math.min(24, Math.round(audioLevel * 0.25)))}px` }} />
+                            <div className="w-1.5 bg-white rounded-full border border-black transition-all duration-75" style={{ height: `${Math.max(10, Math.min(24, Math.round(audioLevel * 0.4)))}px` }} />
+                            <div className="w-1.5 bg-white rounded-full border border-black transition-all duration-75" style={{ height: `${Math.max(8, Math.min(24, Math.round(audioLevel * 0.35)))}px` }} />
+                            <div className="w-1.5 bg-red-400 rounded-full transition-all duration-75" style={{ height: `${Math.max(6, Math.min(24, Math.round(audioLevel * 0.2)))}px` }} />
                           </div>
-                          <span className="text-[9px] font-mono text-zinc-400 block">
-                            Toque p/ enviar comando
-                          </span>
                         </div>
                       ) : isAnalyzing ? (
                         <span className="text-xs font-bold text-zinc-300 animate-pulse block">
-                          Analisando frequências...
+                          Analisando comando...
                         </span>
                       ) : (
                         <div className="flex flex-col items-center gap-1.5">
                           <span className="text-xs font-bold block" style={{ color: currentTheme.colors.textSecondary }}>
-                            Fale para interagir
+                            Fale no microfone
                           </span>
                           <div 
                             className="flex items-center gap-1.5 text-xs font-mono px-2 py-1 rounded-md whitespace-nowrap leading-none border"
@@ -3264,11 +3491,9 @@ export default function App() {
                               borderColor: currentTheme.colors.borderSubtle
                             }}
                           >
-                            <span 
-                              className={`w-2 h-2 rounded-full border border-black/25 shrink-0 ${micPermission === "granted" ? "bg-white" : micPermission === "denied" ? "bg-red-500" : "bg-amber-400"}`} 
-                            />
+                            <span className={`w-2 h-2 rounded-full border border-black/25 shrink-0 ${micPermission === "granted" ? "bg-white" : micPermission === "denied" ? "bg-red-500" : "bg-amber-400"}`} />
                             <span className="font-bold text-[9px] whitespace-nowrap leading-none" style={{ color: currentTheme.colors.textMuted }}>
-                              {micPermission === "granted" ? "MICROFONE PRONTO" : micPermission === "denied" ? "MICROFONE BLOQUEADO" : "CLIQUE P/ FALAR"}
+                              {micPermission === "granted" ? "MICROFONE PRONTO" : micPermission === "denied" ? "MICROFONE BLOQUEADO" : "FALAR NO MICROFONE"}
                             </span>
                           </div>
                         </div>
@@ -3287,17 +3512,14 @@ export default function App() {
                           onClick={requestMicrophonePermission}
                           className="w-full mt-1 py-1.5 px-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-bold text-[9px] uppercase tracking-wide cursor-pointer transition-colors shadow-sm whitespace-nowrap leading-none"
                         >
-                          Habilitar Microfone no Celular
+                          Habilitar Microfone
                         </button>
                       </div>
                     )}
-
                   </div>
 
                   {/* Speech transcript & manual fallback */}
                   <div className="flex-1 flex flex-col justify-between gap-4">
-                    
-                    {/* Real-time Subtitles / Message Box */}
                     <div 
                       className="border-2 rounded-2xl p-5 text-xs flex-1 flex flex-col justify-center"
                       style={{
@@ -3306,11 +3528,8 @@ export default function App() {
                       }}
                     >
                       <div>
-                        <span 
-                          className="text-[9px] font-mono block uppercase font-bold tracking-wider mb-2"
-                          style={{ color: currentTheme.colors.textMuted }}
-                        >
-                          {isListening ? "Transcrição em Tempo Real:" : "Você perguntou:"}
+                        <span className="text-[9px] font-mono block uppercase font-bold tracking-wider mb-2" style={{ color: currentTheme.colors.textMuted }}>
+                          {isListening ? "Transcrição em Tempo Real:" : "Retorno do Sistema:"}
                         </span>
                         <p 
                           className={`font-display font-extrabold italic text-sm mt-0.5 transition-all ${isListening ? "bg-black/30 border border-dashed px-3 py-2 rounded animate-pulse" : ""}`}
@@ -3320,42 +3539,12 @@ export default function App() {
                           }}
                         >
                           {isListening 
-                            ? (realtimeSpeech ? `"${realtimeSpeech}"` : "Ouvindo atentamente... fale algo") 
-                            : (lastSpeechDetected ? `"${lastSpeechDetected}"` : "Aguardando transmissão de voz...")
+                            ? (realtimeSpeech ? `"${realtimeSpeech}"` : `Ouvindo atentamente... fale um dos ${effectiveQuestions.length} gatilhos`) 
+                            : (lastSpeechDetected ? `"${lastSpeechDetected}" — ${aiResponseText}` : aiResponseText)
                           }
                         </p>
                       </div>
                     </div>
-
-                    {/* Suggested Questions Quick Tap */}
-                    {displaySuggestedQuestions.length > 0 && (
-                      <div className="flex flex-col gap-1.5 pt-1">
-                        <span 
-                          className="text-[9px] font-mono font-bold uppercase flex items-center gap-1"
-                          style={{ color: currentTheme.colors.textMuted }}
-                        >
-                          <Sparkles className="w-3 h-3" style={{ color: currentTheme.colors.primary }} />
-                          Perguntas Sugeridas (toque para acionar):
-                        </span>
-                        <div className="flex flex-wrap gap-1.5 max-h-[85px] overflow-y-auto">
-                          {displaySuggestedQuestions.map((sug, idx) => (
-                            <button
-                              key={idx}
-                              type="button"
-                              onClick={() => handleIncomingCommand(sug)}
-                              className="px-2.5 py-1 border text-[10px] font-mono font-semibold rounded-lg transition-all whitespace-nowrap cursor-pointer shadow-sm active:scale-95 hover:brightness-125"
-                              style={{
-                                backgroundColor: currentTheme.colors.chipBg,
-                                borderColor: currentTheme.colors.borderSubtle,
-                                color: currentTheme.colors.textSecondary
-                              }}
-                            >
-                              "{sug}"
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
 
                     {/* Backup input bar */}
                     <form
@@ -3373,7 +3562,7 @@ export default function App() {
                           borderColor: currentTheme.colors.borderSubtle,
                           color: currentTheme.colors.textPrimary
                         }}
-                        placeholder="Escreva a pergunta correspondente aqui..."
+                        placeholder={`Digite exatamente um dos ${effectiveQuestions.length} gatilhos do grupo...`}
                         value={inputText}
                         onChange={(e) => setInputText(e.target.value)}
                         disabled={isAnalyzing}
@@ -3391,9 +3580,7 @@ export default function App() {
                         <Send className="w-3 h-3" />
                       </button>
                     </form>
-
                   </div>
-
                 </div>
               )}
 
@@ -3523,7 +3710,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* NOVA SEÇÃO: APARÊNCIA DO APLICATIVO (5 TEMAS: Amazônia, Taiga, Caatinga, Bambuçal, Pantanal) */}
+              {/* NOVA SEÇÃO: APARÊNCIA DO APLICATIVO (5 TEMAS: Amazônia, Taiga, Caatinga, Bambuçal, Manguezal) */}
               <section 
                 aria-label="Aparência do Aplicativo"
                 className="rounded-2xl p-4 sm:p-5 border-2 transition-all duration-300"
@@ -3764,7 +3951,7 @@ export default function App() {
                       <div className="flex justify-between items-center border-b border-zinc-900 pb-2">
                         <span className="text-[11px] font-mono font-bold text-zinc-200 uppercase tracking-wide flex items-center gap-1.5">
                           <Video className="w-3.5 h-3.5 text-white" />
-                          Vídeo de Apresentação (Intro)
+                          Intro • {currentGroup.name}
                         </span>
                         <span className="text-[8px] px-1.5 py-0.5 rounded font-extrabold font-mono border bg-zinc-800 text-zinc-200 border-zinc-700 flex items-center gap-1">
                           <Lock className="w-2.5 h-2.5" />
@@ -3772,7 +3959,7 @@ export default function App() {
                         </span>
                       </div>
                       <p className="text-[10px] text-zinc-400 leading-normal mt-2 font-mono">
-                        Vídeo de introdução fixado no código-fonte e compartilhado igualmente entre todos os 5 temas (Amazônia, Taiga, Caatinga, Bambuçal e Pantanal).
+                        Vídeo de introdução do grupo <strong>{currentGroup.name}</strong> ({currentGroup.integrantes.join(", ")}). Fixado no código em <code className="text-white">groupsConfig.ts</code> e disponível nos 5 temas.
                       </p>
                     </div>
 
@@ -3780,7 +3967,7 @@ export default function App() {
                       {/* URL Input */}
                       <div className="space-y-1">
                         <label className="text-[9px] text-zinc-400 uppercase font-mono font-bold flex items-center justify-between">
-                          <span>URL do Vídeo (Fixa no Código):</span>
+                          <span>URL da Introdução:</span>
                           <span className="text-[8px] text-zinc-300 font-bold flex items-center gap-1">
                             <Lock className="w-2.5 h-2.5" /> Protegido
                           </span>
@@ -3802,25 +3989,25 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           if (effectiveIntroUrl) {
-                            triggerVideoSlot("intro");
+                            triggerVideoSlot(isFullVideoGroup ? "full_video" : "intro");
                             setActiveTab("chat");
                           }
                         }}
                         disabled={!effectiveIntroUrl}
                         className="w-full flex items-center justify-center gap-1 px-3 py-2 bg-zinc-900 hover:bg-zinc-850 active:bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-300 hover:text-white disabled:opacity-35 disabled:pointer-events-none transition-all cursor-pointer font-bold font-mono text-[9px] uppercase shadow-sm"
                       >
-                        Visualizar Intro
+                        {isFullVideoGroup ? "Visualizar Vídeo Completo" : "Visualizar Intro"}
                       </button>
                     </div>
                   </div>
 
-                  {/* Card 2: Plano de Fundo - Animais da Floresta Amazônica */}
+                  {/* Card 2: Plano de Fundo do Bioma Ativo */}
                   <div className="bg-zinc-900/40 border border-zinc-900 rounded-2xl p-4 flex flex-col justify-between gap-4 text-left">
                     <div>
                       <div className="flex justify-between items-center border-b border-zinc-900 pb-2">
                         <span className="text-[11px] font-mono font-bold text-zinc-200 uppercase tracking-wide flex items-center gap-1.5">
                           <ImageIcon className="w-3.5 h-3.5 text-white" />
-                          Fundo Floresta Amazônica
+                          Cenário: {currentTheme.name}
                         </span>
                         <span className={`text-[8px] px-1.5 py-0.5 rounded font-extrabold font-mono border ${
                           showBgImage 
@@ -4052,7 +4239,7 @@ export default function App() {
                           </span>
                         </div>
                         <p className="text-[8px] text-zinc-500 leading-tight">
-                          A Assistente Virtual WIT enviará os comandos de taxa e resolução inicial para que o reprodutor trave na qualidade selecionada desde o primeiro segundo.
+                          O sistema ASSISTENTES DA NATUREZA enviará os comandos de taxa e resolução inicial para manter a qualidade selecionada desde o primeiro segundo.
                         </p>
                       </div>
                     </div>
@@ -4130,9 +4317,9 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => {
-                            const rawUrl = introUrl || "https://youtu.be/GwhjqwYkk6o";
-                            const cleanId = getYouTubeVideoId(rawUrl) || "GwhjqwYkk6o";
-                            const hdUrl = `https://www.youtube.com/watch?v=${cleanId}&vq=hd1080&fmt=22`;
+                            const rawUrl = effectiveIntroUrl;
+                            const cleanId = getYouTubeVideoId(rawUrl) || "";
+                            const hdUrl = cleanId ? `https://www.youtube.com/watch?v=${cleanId}&vq=hd1080&fmt=22` : rawUrl;
                             navigator.clipboard?.writeText(hdUrl);
                             triggerQualityAutoPulse("hd1080");
                           }}
@@ -4340,12 +4527,12 @@ export default function App() {
                       {/* Resumo do Armazenamento */}
                       <div className="p-2.5 bg-zinc-900/60 rounded-xl border border-zinc-850 text-[9px] font-mono text-zinc-400 space-y-1">
                         <div className="flex justify-between">
-                          <span>Gatilhos Ativos:</span>
-                          <strong className="text-white">{effectiveQuestions.length} canais</strong>
+                          <span>Gatilhos do Grupo:</span>
+                          <strong className="text-white">{effectiveQuestions.length} gatilhos</strong>
                         </div>
                         <div className="flex justify-between">
-                          <span>Perguntas Sugeridas:</span>
-                          <strong className="text-white">{displaySuggestedQuestions.length} sugestões</strong>
+                          <span>Grupo Ativo:</span>
+                          <strong className="text-white truncate max-w-[160px]">{currentGroup.name}</strong>
                         </div>
                         <div className="flex justify-between">
                           <span>Apresentação (Intro):</span>
@@ -4367,95 +4554,57 @@ export default function App() {
                 {/* Right Side: Voice Triggers Grid (Col Span: 8) */}
                 <div className="lg:col-span-8 space-y-4">
                   
-                  {/* Card: Perguntas Sugeridas para o Usuário (Request #8) */}
+                  {/* Card: Seletor de Grupo de Apresentação no Painel */}
                   <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-3 text-left shadow-sm">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-850 pb-2.5">
                       <div className="flex items-center gap-2">
-                        <span className="text-[11px] font-mono font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                          <Sparkles className="w-3.5 h-3.5 text-white" />
-                          Perguntas Sugeridas ao Usuário ({displaySuggestedQuestions.length})
+                        <Users className="w-4 h-4 text-white" />
+                        <span className="text-[11px] font-mono font-bold text-white uppercase tracking-wider">
+                          5 Grupos Oficiais Centralizados (5 Temas)
                         </span>
-                        <span className="text-[8px] font-mono bg-zinc-800 text-zinc-200 px-1.5 py-0.5 rounded font-bold uppercase">
-                          Exibidas no Painel
-                        </span>
-                        {isTaiga && (
-                          <span className="text-[8px] font-mono bg-cyan-950 text-cyan-300 border border-cyan-800/60 px-1.5 py-0.5 rounded font-bold uppercase flex items-center gap-1">
-                            <Lock className="w-2.5 h-2.5" />
-                            Fixas (Taiga)
-                          </span>
-                        )}
                       </div>
-                      
-                      {!isTaiga && (
-                        <button
-                          type="button"
-                          onClick={copyTriggersToSuggested}
-                          className="text-[9px] font-mono font-bold text-white hover:text-zinc-300 bg-zinc-900 hover:bg-zinc-850 px-2.5 py-1 rounded-lg border border-zinc-700 flex items-center gap-1 cursor-pointer transition-all self-start sm:self-auto"
-                          title="Adicionar automaticamente todas as frases dos canais à lista de sugestões"
-                        >
-                          <Copy className="w-3 h-3" />
-                          <span>Copiar dos Gatilhos ({effectiveQuestions.length})</span>
-                        </button>
-                      )}
+                      <span className="text-[8px] font-mono bg-zinc-800 text-zinc-300 px-2 py-0.5 rounded font-bold uppercase flex items-center gap-1">
+                        <Lock className="w-2.5 h-2.5" />
+                        <span>groupsConfig.ts</span>
+                      </span>
                     </div>
 
-                    <p className="text-[10px] text-zinc-400 font-mono leading-normal">
-                      {isTaiga
-                        ? "No tema Taiga, as perguntas sugeridas correspondem exatamente aos 4 gatilhos fixados no código-fonte."
-                        : "Estas perguntas aparecem como botões interativos na tela e no modo de tela focada para o usuário clicar ou falar com a assistente."}
-                    </p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {ALL_GROUPS_LIST.map((grp) => {
+                        const isGroupActive = currentGroup.id === grp.id;
+                        return (
+                          <button
+                            key={grp.id}
+                            type="button"
+                            onClick={() => handleSelectGroup(grp.id, false)}
+                            className={`px-3 py-2 rounded-xl font-mono text-[10px] font-black uppercase border transition-all cursor-pointer flex items-center gap-2 ${
+                              isGroupActive 
+                                ? "bg-white text-black border-white shadow-md ring-2 ring-white/50" 
+                                : "bg-zinc-900 text-zinc-300 border-zinc-700 hover:text-white hover:border-zinc-500"
+                            }`}
+                          >
+                            <span className={`w-2 h-2 rounded-full ${isGroupActive ? "bg-black animate-pulse" : "bg-zinc-500"}`} />
+                            <span>{grp.name}</span>
+                            <span className="text-[8px] opacity-75">
+                              ({grp.presentationType === "full_video" ? "Vídeo Único" : `${grp.triggers.length + 1} Vídeos`})
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
 
-                    {/* Add new suggested question input (only for custom themes) */}
-                    {!isTaiga ? (
-                      <form
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          addSuggestedQuestion(newSuggestedInput);
-                        }}
-                        className="flex items-center gap-2"
-                      >
-                        <input
-                          type="text"
-                          value={newSuggestedInput}
-                          onChange={(e) => setNewSuggestedInput(e.target.value)}
-                          placeholder="Ex: mostrar floresta amazônica..."
-                          className="flex-1 bg-zinc-900 border border-zinc-700 focus:border-white rounded-lg px-3 py-2 text-xs text-white placeholder-zinc-500 font-mono focus:outline-none"
-                        />
-                        <button
-                          type="submit"
-                          disabled={!newSuggestedInput.trim()}
-                          className="px-3.5 py-2 bg-white text-black hover:bg-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg font-mono text-[10px] font-black uppercase transition-all cursor-pointer flex items-center gap-1 shrink-0"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>Adicionar</span>
-                        </button>
-                      </form>
-                    ) : null}
-
-                    {/* Chips list of suggested questions */}
-                    <div className="flex flex-wrap gap-2 pt-1 max-h-[140px] overflow-y-auto pr-1">
-                      {displaySuggestedQuestions.map((sug, idx) => (
-                        <div
-                          key={idx}
-                          className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-mono transition-all ${
-                            isTaiga
-                              ? "bg-cyan-950/40 border border-cyan-800/40 text-cyan-200 font-medium"
-                              : "bg-zinc-900 border border-zinc-700 hover:border-zinc-500 text-zinc-200 group"
-                          }`}
-                        >
-                          <span className="font-semibold select-none">"{sug}"</span>
-                          {!isTaiga && (
-                            <button
-                              type="button"
-                              onClick={() => removeSuggestedQuestion(idx)}
-                              className="text-zinc-500 hover:text-red-400 p-0.5 cursor-pointer transition-colors"
-                              title="Remover pergunta sugerida"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          )}
+                    <div className="p-3 bg-zinc-900/60 border border-zinc-800 rounded-xl text-[10px] font-mono text-zinc-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="space-y-0.5">
+                        <div className="text-white font-bold text-[11px]">
+                          Grupo Selecionado: {currentGroup.name}
                         </div>
-                      ))}
+                        <div className="text-[9px] text-zinc-400">
+                          Integrantes: <span className="text-zinc-200">{currentGroup.integrantes.join(", ")}</span> • Tema de Referência: <span className="text-zinc-200">{currentGroup.temaReferenciaNome}</span>
+                        </div>
+                      </div>
+                      <span className="text-[8px] font-mono font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-200 border border-zinc-700 uppercase whitespace-nowrap self-start sm:self-auto">
+                        Disponível nos 5 Temas
+                      </span>
                     </div>
                   </div>
 
@@ -4464,151 +4613,159 @@ export default function App() {
                     <div className="flex items-center gap-2">
                       <span className="text-[11px] font-mono font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
                         <Mic className="w-3.5 h-3.5 text-white" />
-                        Gatilhos Cadastrados ({effectiveQuestions.length})
+                        {isFullVideoGroup
+                          ? `Vídeo Completo: ${currentGroup.name}`
+                          : `Gatilhos do Grupo: ${currentGroup.name} (${effectiveQuestions.length})`}
                       </span>
-                      {isTaiga && (
-                        <span className="text-[8px] bg-cyan-950 text-cyan-300 border border-cyan-700/60 px-2 py-0.5 rounded font-black font-mono uppercase flex items-center gap-1">
-                          <Lock className="w-2.5 h-2.5" />
-                          <span>Tema Taiga • 4 Gatilhos Fixos</span>
-                        </span>
-                      )}
+                      <span className="text-[8px] bg-zinc-800 text-zinc-200 border border-zinc-700 px-2 py-0.5 rounded font-black font-mono uppercase flex items-center gap-1">
+                        <Lock className="w-2.5 h-2.5" />
+                        <span>{isFullVideoGroup ? "Sem Gatilhos (Vídeo Único)" : `${effectiveQuestions.length} Gatilhos Fixos`}</span>
+                      </span>
                     </div>
                   </div>
 
-                  {isTaiga && (
-                    <div className="p-3 bg-cyan-950/25 border border-cyan-800/40 rounded-xl text-[10px] font-mono text-cyan-200 flex items-center gap-2.5">
-                      <Lock className="w-4 h-4 text-cyan-400 shrink-0" />
-                      <span>
-                        As frases e URLs do tema <strong>TAIGA</strong> são fixadas no código-fonte e protegidas contra alterações no painel.
-                      </span>
-                    </div>
-                  )}
+                  <div className="p-3 bg-zinc-900/40 border border-zinc-800 rounded-xl text-[10px] font-mono text-zinc-300 flex items-center gap-2.5">
+                    <Lock className="w-4 h-4 text-zinc-400 shrink-0" />
+                    <span>
+                      As frases ativadoras e URLs do grupo <strong>{currentGroup.name}</strong> estão centralizadas no arquivo <code className="text-white">groupsConfig.ts</code> e protegidas contra alterações no painel.
+                    </span>
+                  </div>
 
-                  {/* Elegant Cards Grid */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[460px] overflow-y-auto pr-1">
-                    {effectiveQuestions.map((q, idx) => (
-                      <div
-                        key={q.id}
-                        className="bg-zinc-950/80 border border-zinc-900 hover:border-zinc-800 rounded-xl p-4 flex flex-col justify-between gap-3 text-left transition-all duration-200"
-                      >
-                        <div className="flex justify-between items-center border-b border-zinc-900 pb-2">
-                          <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-wide">
-                            {isTaiga ? `Gatilho ${idx + 1} (Taiga)` : `Canal #${idx + 1}`}
-                          </span>
-                          <div className="flex items-center gap-1.5">
-                            {isTaiga ? (
-                              <span className="text-[8px] bg-cyan-950 text-cyan-300 border border-cyan-700/60 px-1.5 py-0.5 rounded font-black font-mono flex items-center gap-1">
+                  {/* Elegant Cards Grid (or Full Video Card for Group 5) */}
+                  {isFullVideoGroup ? (
+                    <div className="bg-zinc-950/80 border border-zinc-800 rounded-2xl p-5 flex flex-col gap-4 text-left">
+                      <div className="flex items-center justify-between border-b border-zinc-900 pb-2.5">
+                        <span className="text-[11px] font-mono font-bold text-white uppercase tracking-wide flex items-center gap-1.5">
+                          <Video className="w-4 h-4 text-white" />
+                          Apresentação Completa em Vídeo Único
+                        </span>
+                        <span className="text-[8px] bg-zinc-800 text-zinc-200 border border-zinc-700 px-2 py-0.5 rounded font-black font-mono uppercase">
+                          CAATINGA · VÍDEO ÚNICO
+                        </span>
+                      </div>
+                      <p className="text-[10px] font-mono text-zinc-300 leading-relaxed">
+                        O grupo <strong>{currentGroup.name}</strong> utiliza apresentação contínua sem gatilhos de voz. Ao término do vídeo, o usuário escolhe entre <strong>ASSISTIR NOVAMENTE</strong> ou <strong>FAZER QUIZ DA CAATINGA</strong>.
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            triggerVideoSlot("full_video");
+                            setActiveTab("chat");
+                          }}
+                          className="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-xl text-white font-mono text-[10px] font-bold uppercase cursor-pointer flex items-center gap-1.5"
+                        >
+                          <Play className="w-3.5 h-3.5" />
+                          <span>Testar Vídeo Completo</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openEcosystemQuiz("caatinga")}
+                          className="px-4 py-2 rounded-xl border font-mono text-[10px] font-black uppercase cursor-pointer flex items-center gap-1.5"
+                          style={{
+                            backgroundColor: currentTheme.colors.primary,
+                            color: currentTheme.colors.primaryText,
+                            borderColor: currentTheme.colors.borderMain
+                          }}
+                        >
+                          <Trophy className="w-3.5 h-3.5" />
+                          <span>Abrir Quiz da Caatinga</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[460px] overflow-y-auto pr-1">
+                      {effectiveQuestions.map((q, idx) => (
+                        <div
+                          key={q.id}
+                          className="bg-zinc-950/80 border border-zinc-900 hover:border-zinc-800 rounded-xl p-4 flex flex-col justify-between gap-3 text-left transition-all duration-200"
+                        >
+                          <div className="flex justify-between items-center border-b border-zinc-900 pb-2">
+                            <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-wide">
+                              Gatilho {idx + 1} • {currentGroup.name}
+                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[8px] bg-zinc-800 text-zinc-300 border border-zinc-700 px-1.5 py-0.5 rounded font-black font-mono flex items-center gap-1">
                                 <Lock className="w-2.5 h-2.5" />
                                 <span>FIXO</span>
                               </span>
-                            ) : (
-                              <>
-                                {q.videoUrl && (
-                                  <span className="text-[8px] bg-zinc-800 text-white px-1.5 py-0.5 rounded font-extrabold font-mono border border-zinc-800">
-                                    ATIVO
-                                  </span>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => removeQuestion(q.id)}
-                                  className="text-zinc-550 hover:text-red-400 transition-colors p-1 cursor-pointer"
-                                  title="Excluir Gatilho"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="space-y-2.5">
-                          {/* Phrase input */}
-                          <div className="space-y-1">
-                            <label className="text-[9px] text-zinc-500 uppercase font-mono font-bold flex items-center justify-between">
-                              <span>Frase Ativadora:</span>
-                              {isTaiga && <span className="text-[8px] text-cyan-300 font-mono">Fixa</span>}
-                            </label>
-                            <input
-                              type="text"
-                              className={`w-full rounded-lg px-2.5 py-1.5 text-[11px] font-bold font-mono focus:outline-none ${
-                                isTaiga
-                                  ? "bg-zinc-950/90 border border-zinc-850 text-zinc-300 cursor-not-allowed select-all"
-                                  : "bg-zinc-900 border border-zinc-800 focus:border-white text-zinc-100"
-                              }`}
-                              value={q.phrase}
-                              onChange={(e) => !isTaiga && updateQuestionPhrase(q.id, e.target.value)}
-                              readOnly={isTaiga}
-                              placeholder="Ex: mostrar floresta"
-                            />
-                          </div>
-
-                          {/* URL Input (YouTube / Web) */}
-                          <div className="space-y-1">
-                            <div className="flex justify-between items-center text-[9px] text-zinc-500 uppercase font-mono font-bold">
-                              <span>URL (YouTube Shorts):</span>
-                              {isYouTubeUrl(q.videoUrl) ? (
-                                <span className="text-[8px] bg-red-600/25 text-red-400 border border-red-500/30 px-1.5 py-0.2 rounded font-black">
-                                  YOUTUBE
-                                </span>
-                              ) : null}
                             </div>
-                            <input
-                              type="text"
-                              className={`w-full rounded-lg px-2.5 py-1.5 text-[10px] font-mono focus:outline-none ${
-                                isTaiga
-                                  ? "bg-zinc-950/90 border border-zinc-850 text-zinc-400 cursor-not-allowed select-all"
-                                  : "bg-zinc-900 border border-zinc-800 focus:border-white text-zinc-100 placeholder-zinc-600"
-                              }`}
-                              value={q.videoUrl}
-                              onChange={(e) => !isTaiga && handleUrlChange(q.id, e.target.value)}
-                              readOnly={isTaiga}
-                            />
                           </div>
 
-                          {/* Trigger test button */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (q.videoUrl) {
-                                triggerVideoSlot(q.id);
-                                setActiveTab("chat");
-                              }
-                            }}
-                            disabled={!q.videoUrl}
-                            className="w-full flex items-center justify-center gap-1 px-2.5 py-1.5 bg-zinc-900 hover:bg-zinc-850 active:bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-350 hover:text-white disabled:opacity-35 disabled:pointer-events-none transition-all cursor-pointer font-bold font-mono text-[9px] uppercase shadow-sm"
-                          >
-                            Testar Canal no Reprodutor
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                          <div className="space-y-2.5">
+                            {/* Phrase input */}
+                            <div className="space-y-1">
+                              <label className="text-[9px] text-zinc-500 uppercase font-mono font-bold flex items-center justify-between">
+                                <span>Frase Ativadora:</span>
+                                <span className="text-[8px] text-zinc-400 font-mono">Fixa</span>
+                              </label>
+                              <input
+                                type="text"
+                                className="w-full rounded-lg px-2.5 py-1.5 text-[11px] font-bold font-mono focus:outline-none bg-zinc-950/90 border border-zinc-850 text-zinc-300 cursor-not-allowed select-all"
+                                value={q.phrase}
+                                readOnly
+                              />
+                            </div>
 
-                    {/* Streamlined "Add" card trigger slot - Only for other themes */}
-                    {!isTaiga ? (
-                      <button
-                        type="button"
-                        onClick={addQuestion}
-                        className="border border-dashed border-zinc-800 hover:border-white/50 rounded-xl p-4 flex flex-col justify-center items-center gap-2 hover:bg-zinc-900/25 transition-all cursor-pointer text-zinc-500 hover:text-zinc-300 min-h-[190px]"
-                      >
-                        <div className="w-10 h-10 rounded-full border border-dashed border-zinc-800 flex items-center justify-center text-zinc-500 group-hover:border-zinc-300">
-                          <span className="text-base leading-none font-bold">+</span>
+                            {/* URL Input (YouTube / Web) */}
+                            <div className="space-y-1">
+                              <div className="flex justify-between items-center text-[9px] text-zinc-500 uppercase font-mono font-bold">
+                                <span>URL Fixa:</span>
+                                {isYouTubeUrl(q.videoUrl) ? (
+                                  <span className="text-[8px] bg-red-600/25 text-red-400 border border-red-500/30 px-1.5 py-0.2 rounded font-black">
+                                    YOUTUBE
+                                  </span>
+                                ) : null}
+                              </div>
+                              <input
+                                type="text"
+                                className="w-full rounded-lg px-2.5 py-1.5 text-[10px] font-mono focus:outline-none bg-zinc-950/90 border border-zinc-850 text-zinc-400 cursor-not-allowed select-all"
+                                value={q.videoUrl}
+                                readOnly
+                              />
+                            </div>
+
+                            {/* Trigger test button */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (q.videoUrl) {
+                                  triggerVideoSlot(q.id);
+                                  setActiveTab("chat");
+                                }
+                              }}
+                              disabled={!q.videoUrl}
+                              className="w-full flex items-center justify-center gap-1 px-2.5 py-1.5 bg-zinc-900 hover:bg-zinc-850 active:bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-350 hover:text-white disabled:opacity-35 disabled:pointer-events-none transition-all cursor-pointer font-bold font-mono text-[9px] uppercase shadow-sm"
+                            >
+                              Testar Gatilho no Reprodutor
+                            </button>
+                          </div>
                         </div>
-                        <div className="text-center">
-                          <span className="text-[11px] font-bold uppercase tracking-wider font-mono block text-zinc-300">Novo Gatilho</span>
-                          <span className="text-[9px] text-zinc-500 mt-1 max-w-[170px] block mx-auto leading-normal font-mono">
-                            Associe um novo arquivo de vídeo a um comando.
-                          </span>
-                        </div>
-                      </button>
-                    ) : (
-                      <div className="border border-dashed border-cyan-900/50 rounded-xl p-4 flex flex-col justify-center items-center gap-2 bg-cyan-950/15 min-h-[190px] text-center">
-                        <Lock className="w-7 h-7 text-cyan-400" />
-                        <span className="text-[11px] font-bold uppercase tracking-wider font-mono text-cyan-300">Conjunto Fixo</span>
-                        <span className="text-[9px] text-zinc-400 max-w-[180px] font-mono leading-relaxed">
-                          Os 4 gatilhos do tema Taiga foram pré-carregados e fixados no código-fonte.
-                        </span>
-                      </div>
-                    )}
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Quick Quizzes Launcher in Settings */}
+                  <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-3 text-left">
+                    <div className="flex items-center justify-between border-b border-zinc-900 pb-2">
+                      <span className="text-[11px] font-mono font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                        <Trophy className="w-3.5 h-3.5 text-white" />
+                        Quizzes dos 5 Ecossistemas (5.000 pts)
+                      </span>
+                      <span className="text-[8px] font-mono text-zinc-400 uppercase">5 Perguntas por Bioma</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {ALL_QUIZZES_LIST.map((qz) => (
+                        <button
+                          key={qz.id}
+                          type="button"
+                          onClick={() => openEcosystemQuiz(qz.themeId)}
+                          className="px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-white hover:text-black border border-zinc-700 text-zinc-200 font-mono text-[9.5px] font-bold uppercase cursor-pointer transition-all"
+                        >
+                          Quiz {qz.ecosystemName}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
                 </div>
@@ -4626,50 +4783,64 @@ export default function App() {
       {!hidePanels && !isFullscreen && (
         <footer id="wit-footer" className="mt-auto py-6 border-t border-zinc-900 bg-black">
           <div className="max-w-5xl mx-auto px-6 flex flex-col sm:flex-row justify-between items-center text-[10px] font-mono text-zinc-400 gap-2">
-            <span>WIT — ASSISTENTE VIRTUAL</span>
-            <span>© CONEXÃO INTERATIVA DE VÍDEO</span>
+            <span>ASSISTENTES DA NATUREZA • 9º A – OSMARINHO</span>
+            <span>AMBIENTES INTELIGENTES • IoT • IA • MONITORAMENTO AMBIENTAL</span>
           </div>
         </footer>
       )}
 
-      {/* Mode: Painel Oculto (Acompanha Falar com Assistente + Perguntas Sugeridas) */}
-      {hidePanels && !isFullscreen && (
+      {/* Mode: Painel Oculto (Microfone + Gatilhos do Grupo Ativo ou Controles de Vídeo Completo) */}
+      {hasEnteredApp && hasSelectedGroup && hidePanels && !isFullscreen && (
         <div className="fixed bottom-3 sm:bottom-5 left-1/2 -translate-x-1/2 w-full max-w-4xl px-3 sm:px-4 z-50 select-none pointer-events-auto animate-fade-in">
           <div className="bg-black/92 backdrop-blur-md border-2 border-white/80 rounded-2xl p-3 sm:p-4 shadow-[0_8px_35px_rgba(0,0,0,0.95)] flex flex-col gap-2.5">
-            {/* Top row of the clean dock: Voice button + real-time status + control buttons */}
             <div className="flex items-center justify-between gap-2.5">
               <div className="flex items-center gap-2 min-w-0 flex-1">
-                <button
-                  type="button"
-                  onClick={toggleListening}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl font-mono text-xs font-black uppercase transition-all cursor-pointer border-2 shrink-0 ${
-                    isListening || isRecordingMedia
-                      ? "bg-red-600 text-white border-white animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.7)]"
-                      : "bg-white text-black border-black hover:bg-zinc-200 shadow-sm active:scale-95"
-                  }`}
-                  title="Falar com a Assistente Virtual"
-                >
-                  {isListening || isRecordingMedia ? (
-                    <>
-                      <MicOff className="w-4 h-4 shrink-0" />
-                      <span className="whitespace-nowrap">{isRecordingMedia ? `Gravando (${recordingDuration}s)` : "Ouvindo..."}</span>
-                    </>
-                  ) : (
-                    <>
-                      <Mic className="w-4 h-4 shrink-0" />
-                      <span className="whitespace-nowrap">Falar com a Assistente</span>
-                    </>
-                  )}
-                </button>
+                {!presentationEnded && !isFullVideoGroup && (
+                  <button
+                    type="button"
+                    onClick={toggleListening}
+                    className={`flex items-center gap-2 px-3.5 py-2 rounded-xl font-mono text-xs font-black uppercase transition-all cursor-pointer border-2 shrink-0 ${
+                      isListening || isRecordingMedia
+                        ? "bg-red-600 text-white border-white animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.7)]"
+                        : "bg-white text-black border-black hover:bg-zinc-200 shadow-sm active:scale-95"
+                    }`}
+                    title="Falar no Microfone"
+                  >
+                    {isListening || isRecordingMedia ? (
+                      <>
+                        <MicOff className="w-4 h-4 shrink-0" />
+                        <span className="whitespace-nowrap">{isRecordingMedia ? `Gravando (${recordingDuration}s)` : "Ouvindo..."}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="w-4 h-4 shrink-0" />
+                        <span className="whitespace-nowrap">Falar no Microfone</span>
+                      </>
+                    )}
+                  </button>
+                )}
 
-                {(isListening || realtimeSpeech) && (
+                {(isListening || realtimeSpeech) && !presentationEnded && !isFullVideoGroup && (
                   <div className="text-xs font-mono text-white/90 italic truncate bg-zinc-900/80 px-2.5 py-1.5 rounded-lg border border-zinc-700 min-w-0 flex-1">
-                    {realtimeSpeech ? `"${realtimeSpeech}"` : "Fale sua pergunta agora..."}
+                    {realtimeSpeech ? `"${realtimeSpeech}"` : `Fale um dos ${effectiveQuestions.length} gatilhos...`}
                   </div>
                 )}
               </div>
 
               <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => openEcosystemQuiz(isFullVideoGroup ? "caatinga" : selectedThemeId)}
+                  className="px-2.5 py-1.5 font-mono text-[10px] font-black uppercase cursor-pointer flex items-center gap-1 rounded-lg border whitespace-nowrap"
+                  style={{
+                    backgroundColor: currentTheme.colors.primary,
+                    color: currentTheme.colors.primaryText,
+                    borderColor: currentTheme.colors.borderMain
+                  }}
+                >
+                  <Trophy className="w-3.5 h-3.5 shrink-0" />
+                  <span>{isFullVideoGroup ? "Quiz Caatinga" : "Quiz"}</span>
+                </button>
                 <button
                   type="button"
                   onClick={handleReplayVideo}
@@ -4691,22 +4862,20 @@ export default function App() {
               </div>
             </div>
 
-            {/* Perguntas Sugeridas: clickable chips directly below voice button */}
-            {displaySuggestedQuestions.length > 0 && (
+            {!presentationEnded && !isFullVideoGroup && (
               <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pt-1.5 border-t border-zinc-850">
-                <span className="text-[10px] font-mono font-bold uppercase text-zinc-400 whitespace-nowrap shrink-0 flex items-center gap-1">
-                  <Sparkles className="w-3 h-3 text-white" />
-                  Perguntas Sugeridas:
+                <span className="text-[10px] font-mono font-bold uppercase text-zinc-400 whitespace-nowrap shrink-0">
+                  Gatilhos:
                 </span>
                 <div className="flex items-center gap-1.5 flex-nowrap">
-                  {displaySuggestedQuestions.map((sug, idx) => (
+                  {effectiveQuestions.map((q) => (
                     <button
-                      key={idx}
+                      key={q.id}
                       type="button"
-                      onClick={() => handleIncomingCommand(sug)}
+                      onClick={() => triggerVideoSlot(q.id)}
                       className="px-2.5 py-1 bg-zinc-900 hover:bg-white hover:text-black border border-zinc-700 hover:border-white text-zinc-200 text-[11px] font-mono font-semibold rounded-lg transition-all whitespace-nowrap cursor-pointer shrink-0 shadow-sm active:scale-95"
                     >
-                      "{sug}"
+                      "{q.phrase}"
                     </button>
                   ))}
                 </div>
@@ -4716,13 +4885,13 @@ export default function App() {
         </div>
       )}
 
-      {/* Floating Microphone Action Button (Apenas quando o painel estiver visível) */}
-      {activeTab === "chat" && !hidePanels && !isFullscreen && (
+      {/* Floating Microphone Action Button (Apenas grupos com gatilhos, painel visível e apresentação ativa) */}
+      {hasEnteredApp && hasSelectedGroup && activeTab === "chat" && !hidePanels && !isFullscreen && !presentationEnded && !isFullVideoGroup && (
         <div className="fixed bottom-6 right-6 z-[45] flex flex-col items-end gap-1.5 pointer-events-auto animate-fade-in">
           <div className="flex items-center gap-1.5 bg-black/95 border-2 border-white px-2.5 py-1 rounded-full shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] text-[8px] font-mono font-bold uppercase transition-all duration-300">
             <span className={`w-1.5 h-1.5 rounded-full ${isListening || isRecordingMedia ? "bg-red-500 animate-pulse" : "bg-white"}`} />
             <span className={isListening || isRecordingMedia ? "text-red-400 font-extrabold animate-pulse" : "text-white"}>
-              {isListening || isRecordingMedia ? (isRecordingMedia ? `GRAVANDO ${recordingDuration}s` : "ESCUTA ATIVA") : "CLIQUE P/ FALAR"}
+              {isListening || isRecordingMedia ? (isRecordingMedia ? `GRAVANDO ${recordingDuration}s` : "ESCUTA ATIVA") : "FALAR NO MICROFONE"}
             </span>
           </div>
           <button
@@ -4859,6 +5028,13 @@ export default function App() {
         theme={currentTheme}
         onSelectTheme={handleSelectTheme}
         onOpenSettings={() => setActiveTab("settings")}
+      />
+
+      {/* Interactive Kahoot-Inspired Ecosystem Quiz Modal */}
+      <EcosystemQuizModal
+        isOpen={quizModalOpen}
+        initialThemeId={quizTargetThemeId}
+        onClose={() => setQuizModalOpen(false)}
       />
 
     </div>

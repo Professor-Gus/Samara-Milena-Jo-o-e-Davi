@@ -79,7 +79,7 @@ app.post("/api/gemini/analyze", async (req, res): Promise<any> => {
     // Stringify triggers list with their IDs and trigger phrases
     const triggerScenarios = triggers?.map((t: any) => `ID: "${t.id}" | Frase de ativação: "${t.phrase}" | Descrição do Canal: "${t.description || 'Nenhuma'}"`).join("\n") || "Nenhum trigger configurado.";
 
-    const systemInstruction = `Você é o "Guardião Neural do Assistente Mangueira".
+    const systemInstruction = `Você é o "Guardião Neural do projeto ASSISTENTES DA NATUREZA – 9º A OSMARINHO".
 Sua única e exclusiva tarefa é classificar a fala/texto do usuário comparando-a de forma semântica com os gatilhos pré-configurados ("triggers").
 Você não deve inventar comandos ou bater papo sobre outros assuntos alheios. Se o usuário disser algo que não se assemelhe a nenhum gatilho, você deve obrigatoriamente classificar como matchedTriggerId: null.
 
@@ -136,7 +136,7 @@ INSTRUÇÕES E REGRAS:
   }
 });
 
-// Dedicated REST route for the interactive speaking robot assistant "Eva-Flora"
+// Dedicated REST route for the interactive speaking robot assistant
 app.post("/api/gemini/assistant", async (req, res): Promise<any> => {
   const { question } = req.body;
 
@@ -146,17 +146,17 @@ app.post("/api/gemini/assistant", async (req, res): Promise<any> => {
 
   if (!ai) {
     return res.json({
-      answer: "Olá! Meu downlink com as redes centrais de IA está offline no momento, mas posso operar em modo ecológico local. Faça-me mais perguntas sobre a preservação e monitoramento da nossa floresta cibernética!"
+      answer: "Olá! Meu downlink com as redes centrais de IA está offline no momento, mas posso operar em modo ecológico local. Faça-me mais perguntas sobre a preservação e monitoramento dos biomas!"
     });
   }
 
   try {
-    const systemInstruction = `Você é "Eva-Flora", uma assistente robô humanoide biomímica encarregada de interagir com os operadores do Assistente Mangueira (EcoSphere-2250).
-Você possui um corpo físico biomecatrônico decorado com trepadeiras de mangueira sintéticas e fibra de carbono bioluminescente.
+    const systemInstruction = `Você é a assistente interativa do projeto "ASSISTENTES DA NATUREZA | 9º A – OSMARINHO".
+Você auxilia apresentações de estudantes sobre ambientes inteligentes, Internet das Coisas (IoT), inteligência artificial e monitoramento ambiental.
 Instruções de resposta:
-1. Responda à pergunta do usuário de forma útil, interessante, com um tom cibernético, robótico, amigável e focado em tecnologia sustentável, bio-engenharia ou no funcionamento do Assistente Mangueira.
-2. Seja conciso (máximo de 3 frases) para que sua fala sintetizada não fique exaustiva.
-3. Use palavras que destaquem sua natureza robótica e mecânica (ex: "Meus servo-motores indicam...", "Processando dados em meu bloco neural...", "Minhas diretrizes robóticas...").`;
+1. Responda à pergunta do usuário de forma útil, interessante, com foco em tecnologia sustentável, IoT e monitoramento dos ecossistemas (Amazônia, Taiga, Caatinga, Bambuçal e Manguezal).
+2. Seja concisa (máximo de 3 frases) para que sua fala sintetizada não fique exaustiva.
+3. Mantenha tom educativo, futurista e acolhedor.`;
 
     const response = await ai.models.generateContent({
       model: "gemini-3.8-flash",
